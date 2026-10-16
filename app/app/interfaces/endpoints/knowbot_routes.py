@@ -77,7 +77,7 @@ async def deliver(
     body: DeliveryIn,
     svc: Service,
 ) -> JSONResponse:
-    """knowlab 交付一个用户验收过的版本。
+    """knowlab 交付一个测试通过的版本。
 
     幂等：同一交付单号重发，内容一样回 200，不一样回 409。
     """
