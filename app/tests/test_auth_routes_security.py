@@ -14,9 +14,12 @@ from app.main import app, settings
 
 
 class FakeAuthService:
-    def __init__(self, sessions: dict[str, BrowserSession]) -> None:
+    def __init__(
+        self, sessions: dict[str, BrowserSession], logout_url: str | None = None
+    ) -> None:
         self.sessions = sessions
         self.deleted: list[str | None] = []
+        self.logout_url = logout_url
 
     async def get_browser_session(
         self, session_id: str | None
@@ -50,6 +53,10 @@ class FakeAuthService:
 
     async def delete_session(self, session_id: str | None) -> None:
         self.deleted.append(session_id)
+
+    async def end_session(self, session_id: str | None) -> str | None:
+        self.deleted.append(session_id)
+        return self.logout_url
 
 
 def session(surface: str, *scopes: str) -> BrowserSession:
@@ -140,6 +147,60 @@ async def test_logout_is_post_only_and_surface_csrf_protected(
         )
         assert allowed.status_code == 204
         assert fake.deleted == ["member"]
+        assert allowed.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("surface", "cookie", "origin", "module"),
+    [
+        ("web", "sunmoonai_knowmart_web_sid", "http://localhost:3000", web_auth),
+        ("admin", "sunmoonai_knowmart_admin_sid", "http://localhost:5173", admin_auth),
+    ],
+)
+async def test_logout_hands_back_the_provider_logout_url(
+    surface: str,
+    cookie: str,
+    origin: str,
+    module: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    url = "https://identity.example.test/api/logout?client_id=x"
+    fake = FakeAuthService({"member": session(surface, "profile:read")}, url)
+    monkeypatch.setattr(auth_middleware, f"{surface}_auth_service", fake)
+    monkeypatch.setattr(module, "auth_service", fake)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        client.cookies.set(cookie, "member")
+        response = await client.post(
+            f"/api/auth/{surface}/logout",
+            headers={
+                "Origin": origin,
+                "X-CSRF-Token": "csrf-token-with-at-least-thirty-two-characters",
+            },
+        )
+    assert response.status_code == 200
+    assert response.json() == {"logout_url": url}
+    assert response.headers["cache-control"] == "no-store"
+    assert fake.deleted == ["member"]
+    assert cookie in response.headers.get("set-cookie", "")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["web", "admin"])
+async def test_logged_out_returns_to_the_frontend(surface: str) -> None:
+    profile = settings.browser_profile(surface)  # type: ignore[arg-type]
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        response = await client.get(f"/api/auth/{surface}/logged-out")
+    assert response.status_code == 302
+    assert response.headers["location"].startswith(profile.frontend_base_url)
+    assert response.headers["location"].endswith(profile.default_return_to)
+    assert response.headers["cache-control"] == "no-store"
 
 
 @pytest.mark.asyncio

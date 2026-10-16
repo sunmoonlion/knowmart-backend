@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
 
 import app.infrastructure.storage.session_store as session_store_module
-from app.application.errors.exceptions import ForbiddenError, UnauthorizedError
+from app.application.errors.exceptions import (
+    ForbiddenError,
+    ServiceUnavailableError,
+    UnauthorizedError,
+)
 from app.application.services.auth_service import AuthService
 from app.domain.security import BrowserSession, Principal
 from app.infrastructure.storage.session_store import RedisSessionStore
@@ -55,6 +59,18 @@ class FakeOidc:
             "roles": ["editor", "provider-admin"],
             "scope": "profile:read root:all knowmart:admin",
         }
+
+    async def end_session_url(
+        self, *, post_logout_redirect_uri: str, state: str
+    ) -> str | None:
+        return "https://identity.example.test/api/logout?" + urlencode(
+            {"post_logout_redirect_uri": post_logout_redirect_uri, "state": state}
+        )
+
+
+class UnreachableLogoutOidc(FakeOidc):
+    async def end_session_url(self, **_: str) -> str | None:
+        raise ServiceUnavailableError("OIDC discovery unavailable")
 
 
 class NoUserDirectory:
@@ -319,3 +335,63 @@ def test_browser_identity_requires_valid_organizations(field: str, value: str) -
     )
     with pytest.raises(ValueError, match="ORGANIZATION"):
         config.require_browser_identity()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("surface", "landing"),
+    [
+        ("web", "https://web.example.test/api/auth/web/logged-out"),
+        ("admin", "https://admin.example.test/api/auth/admin/logged-out"),
+    ],
+)
+async def test_end_session_deletes_locally_and_returns_provider_logout(
+    surface: str, landing: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    redis = FakeRedis()
+    monkeypatch.setattr(
+        session_store_module, "get_redis", lambda: FakeRedisHolder(redis)
+    )
+    config = settings()
+    service = build(StubAuthService, surface, config)
+    start = await service.begin_login()
+    state = parse_qs(urlsplit(start.authorization_url).query)["state"][0]
+    session_start, _ = await service.complete_login(
+        code="code", state=state, transaction_id=start.transaction_id
+    )
+    raw = redis.values[
+        f"{config.browser_profile(surface).session_key_prefix}{session_start.session_id}"  # type: ignore[arg-type]
+    ]
+    assert "id_token" not in raw  # logout does not need a stored token
+
+    url = await service.end_session(session_start.session_id)
+    assert url is not None
+    query = parse_qs(urlsplit(url).query)
+    assert query["post_logout_redirect_uri"] == [landing]
+    assert service.post_logout_redirect_uri == landing
+    assert len(query["state"][0]) >= 16
+    assert await service.get_browser_session(session_start.session_id) is None
+
+
+@pytest.mark.asyncio
+async def test_end_session_falls_back_to_local_logout_when_provider_is_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redis = FakeRedis()
+    monkeypatch.setattr(
+        session_store_module, "get_redis", lambda: FakeRedisHolder(redis)
+    )
+    service = StubAuthService(
+        "web",  # type: ignore[arg-type]
+        settings(),
+        UnreachableLogoutOidc(),
+        sessions=RedisSessionStore(),
+        users=NoUserDirectory(),
+    )
+    start = await service.begin_login()
+    state = parse_qs(urlsplit(start.authorization_url).query)["state"][0]
+    session_start, _ = await service.complete_login(
+        code="code", state=state, transaction_id=start.transaction_id
+    )
+    assert await service.end_session(session_start.session_id) is None
+    assert await service.get_browser_session(session_start.session_id) is None

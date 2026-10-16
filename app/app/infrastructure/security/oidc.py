@@ -24,6 +24,7 @@ class OidcMetadata:
     authorization_endpoint: str
     token_endpoint: str
     jwks_uri: str
+    end_session_endpoint: str | None = None
 
 
 class OidcProviderClient:
@@ -147,6 +148,14 @@ class OidcProviderClient:
                 payload.get("token_endpoint"), "token_endpoint"
             ),
             jwks_uri=self._validate_provider_url(payload.get("jwks_uri"), "jwks_uri"),
+            # Optional (RP-initiated logout); if present, same-origin like the rest.
+            end_session_endpoint=(
+                self._validate_provider_url(
+                    payload["end_session_endpoint"], "end_session_endpoint"
+                )
+                if payload.get("end_session_endpoint") is not None
+                else None
+            ),
         )
         self._metadata = metadata
         self._metadata_loaded_at = now
@@ -267,6 +276,26 @@ class OidcProviderClient:
                 "The identity token is invalid", code="token_invalid"
             )
         return await self.verify_id_token(id_token, nonce=nonce, metadata=metadata)
+
+    async def end_session_url(
+        self, *, post_logout_redirect_uri: str, state: str
+    ) -> str | None:
+        """Public logout URL for the browser.
+
+        The provider ends its session and redirects back only to a URI registered for
+        this client_id; anything else stops at the provider (Casdoor 4.12, SDD 0027).
+        """
+        metadata = await self.get_metadata()
+        if metadata.end_session_endpoint is None:
+            return None
+        params = urlencode(
+            {
+                "client_id": self._profile.client_id,
+                "post_logout_redirect_uri": post_logout_redirect_uri,
+                "state": state,
+            }
+        )
+        return f"{metadata.end_session_endpoint}?{params}"
 
     async def exchange_client_credentials(
         self,

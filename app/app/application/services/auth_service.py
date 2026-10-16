@@ -9,10 +9,15 @@ import secrets
 import time
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import ValidationError as PydanticValidationError
 
-from app.application.errors.exceptions import ForbiddenError, UnauthorizedError
+from app.application.errors.exceptions import (
+    AppException,
+    ForbiddenError,
+    UnauthorizedError,
+)
 from app.application.ports.auth import IdentityProvider, SessionStore, UserDirectory
 from app.domain.security import BrowserSession, LoginStart, Principal, SessionStart
 from core.config import BrowserSurface, BrowserSurfaceProfile, Settings
@@ -324,6 +329,32 @@ class AuthService:
             await self._sessions.delete(
                 f"{self._profile.session_key_prefix}{session_id}"
             )
+
+    @property
+    def post_logout_redirect_uri(self) -> str:
+        """Where the provider sends the browser after logout.
+
+        /api/auth/<surface>/logged-out on the origin of the validated callback URI;
+        registered with the provider next to the callback.
+        """
+        callback = urlsplit(self._profile.redirect_uri)
+        path = f"/api/auth/{self.surface}/logged-out"
+        return urlunsplit((callback.scheme, callback.netloc, path, "", ""))
+
+    async def end_session(self, session_id: str | None) -> str | None:
+        """Delete the local session; return the provider logout URL that ends SSO too.
+
+        None means local logout only (the provider has no logout endpoint or cannot be
+        reached); local logout never depends on the provider.
+        """
+        await self.delete_session(session_id)
+        try:
+            return await self._oidc.end_session_url(
+                post_logout_redirect_uri=self.post_logout_redirect_uri,
+                state=self._new_secret(16),
+            )
+        except AppException:
+            return None
 
     async def cancel_login(self, transaction_id: str | None) -> None:
         if transaction_id and len(transaction_id) <= 256:

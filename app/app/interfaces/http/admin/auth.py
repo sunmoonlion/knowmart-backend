@@ -4,7 +4,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Cookie, Depends, Query, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.application.errors.exceptions import AppException
 from app.bootstrap.auth import build_auth_service
@@ -74,15 +74,39 @@ async def callback(
     return response
 
 
-@router.post("/logout", status_code=204, summary="Log out Admin browser")
+@router.post(
+    "/logout",
+    summary="Log out Admin browser",
+    responses={
+        200: {
+            "description": "Logged out; navigate to logout_url to end single sign-on"
+        },
+        204: {"description": "Logged out locally"},
+    },
+)
 async def logout(
-    response: Response,
     _: Annotated[BrowserSession, Depends(get_admin_browser_session)],
     session_id: str | None = Cookie(default=None, alias=profile.session_cookie_name),
-) -> None:
-    await auth_service.delete_session(session_id)
+) -> Response:
+    logout_url = await auth_service.end_session(session_id)
+    response: Response = (
+        JSONResponse({"logout_url": logout_url})
+        if logout_url
+        else Response(status_code=204)
+    )
     response.delete_cookie(profile.session_cookie_name, path="/")
     response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@router.get("/logged-out", summary="Return from provider logout")
+async def logged_out() -> RedirectResponse:
+    """The provider redirects here after ending its session; on to the Admin app."""
+    response = RedirectResponse(
+        url=frontend_redirect(profile, profile.default_return_to), status_code=302
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @router.get("/me", summary="Get current Admin user")

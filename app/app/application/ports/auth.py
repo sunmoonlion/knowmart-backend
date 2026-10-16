@@ -30,6 +30,15 @@ class IdentityProvider(Protocol):
         """Return the claims of the verified identity token."""
         ...
 
+    async def end_session_url(
+        self, *, post_logout_redirect_uri: str, state: str
+    ) -> str | None:
+        """The provider logout URL that also ends its own session; None if it has none.
+
+        Identifies this client by client_id, so no token has to be kept for logout.
+        """
+        ...
+
 
 class SessionStore(Protocol):
     """Expiring browser state: login transactions and sessions."""

@@ -54,7 +54,12 @@ def token(key: RSAKey, audience: str, **overrides: object) -> str:
     )
 
 
-def client(surface: str, encoded: str, key: RSAKey) -> OidcProviderClient:
+def client(
+    surface: str,
+    encoded: str,
+    key: RSAKey,
+    discovery_extra: dict[str, str] | None = None,
+) -> OidcProviderClient:
     config = settings()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -70,6 +75,7 @@ def client(surface: str, encoded: str, key: RSAKey) -> OidcProviderClient:
                         "https://identity.example.test/api/login/oauth/access_token"
                     ),
                     "jwks_uri": "https://identity.example.test/.well-known/jwks",
+                    **(discovery_extra or {}),
                 },
             )
         if request.url.path.endswith("/jwks"):
@@ -200,3 +206,65 @@ async def test_workload_access_token_requires_exact_audience_and_signature() -> 
             token(key, "wrong-audience"), audience="knowbase-internal"
         )
     assert error.value.code == "audience_mismatch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("surface", "client_id"),
+    [("admin", "knowmart-admin-client"), ("web", "knowmart-web-client")],
+)
+async def test_logout_url_names_this_client_and_landing(
+    surface: str, client_id: str
+) -> None:
+    key = RSAKey.generate_key(parameters={"kid": "test-key"})
+    oidc = client(
+        surface,
+        token(key, client_id),
+        key,
+        {"end_session_endpoint": "https://identity.example.test/api/logout"},
+    )
+    url = await oidc.end_session_url(
+        post_logout_redirect_uri="https://web.example.test/api/auth/web/logged-out",
+        state="state-123",
+    )
+    assert url is not None
+    parts = urlsplit(url)
+    assert f"{parts.scheme}://{parts.netloc}{parts.path}" == (
+        "https://identity.example.test/api/logout"
+    )
+    assert parse_qs(parts.query) == {
+        "client_id": [client_id],
+        "post_logout_redirect_uri": [
+            "https://web.example.test/api/auth/web/logged-out"
+        ],
+        "state": ["state-123"],
+    }
+
+
+@pytest.mark.asyncio
+async def test_logout_url_is_absent_without_provider_logout() -> None:
+    key = RSAKey.generate_key(parameters={"kid": "test-key"})
+    oidc = client("web", token(key, "knowmart-web-client"), key)
+    assert (
+        await oidc.end_session_url(
+            post_logout_redirect_uri="https://web.example.test/api/auth/web/logged-out",
+            state="state-123",
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_discovery_cannot_redirect_logout_cross_origin() -> None:
+    key = RSAKey.generate_key(parameters={"kid": "test-key"})
+    oidc = client(
+        "web",
+        token(key, "knowmart-web-client"),
+        key,
+        {"end_session_endpoint": "https://evil.example.test/api/logout"},
+    )
+    with pytest.raises(ServiceUnavailableError, match="end_session_endpoint"):
+        await oidc.end_session_url(
+            post_logout_redirect_uri="https://web.example.test/api/auth/web/logged-out",
+            state="state-123",
+        )
