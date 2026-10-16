@@ -291,6 +291,14 @@ class AuthService:
             else:
                 continue
             for candidate in candidates:
+                # Casdoor 的 JWT 把角色给成对象列表（name、owner、isEnabled…）：
+                # 取 name，停用的不算
+                if isinstance(candidate, dict):
+                    if candidate.get("isEnabled") is False:
+                        continue
+                    candidate = candidate.get("name")
+                    if not isinstance(candidate, str):
+                        continue
                 item = str(candidate).strip()
                 if item in allowlist:
                     selected.add(item)

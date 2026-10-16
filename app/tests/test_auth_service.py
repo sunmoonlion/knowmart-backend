@@ -241,6 +241,28 @@ def test_provider_claims_are_filtered_by_surface_local_allowlist() -> None:
     ) == ["profile:read"]
 
 
+def test_casdoor_role_objects_are_read_by_name() -> None:
+    """Casdoor 4.12 的 JWT：roles 是角色对象列表（待办 98 实测的形状）。"""
+    service = build(AuthService, "web", settings())
+    role = {
+        "owner": "built-in",
+        "name": "editor",
+        "displayName": "editor",
+        "createdTime": "2026-10-16T23:40:00+08:00",
+        "description": "",
+        "users": ["built-in/admin"],
+        "groups": [],
+        "roles": [],
+        "domains": [],
+        "isEnabled": True,
+    }
+    allow = service.profile.role_allowlist
+    assert service._allowed_claims(([role],), allow) == ["editor"]
+    assert service._allowed_claims(([role | {"isEnabled": False}],), allow) == []
+    assert service._allowed_claims(([role | {"name": "provider-admin"}],), allow) == []
+    assert service._allowed_claims(([{"owner": "built-in"}, 7, None],), allow) == []
+
+
 class OwnerOidc(FakeOidc):
     def __init__(self, owner: object) -> None:
         self.owner = owner
