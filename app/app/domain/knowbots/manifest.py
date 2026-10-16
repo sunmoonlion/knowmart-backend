@@ -1,7 +1,7 @@
 """分身清单 `knowbot-manifest/v1` 的外层（SDD 0027 §3.1）。
 
 清单分两层。外层由 knowmart 拥有、在这里严格校验：格式标识、名字与说明、版本、
-这一版能读的用户数据、每条判断规则的出处。里面的 `pack` 是可执行部分（步骤、
+运行方、这一版能读的用户数据、每条判断规则的出处。里面的 `pack` 是可执行部分（步骤、
 验收、底稿的形状），由执行它的工作台拥有、按自己的模型完整校验；这里只核最基本
 的骨架，免得复制一份执行方的模型。
 
@@ -48,6 +48,9 @@ class KnowbotManifestV1(Strict):
     name: str = Field(min_length=1, max_length=80)
     tagline: str = Field(default="", max_length=200)
     version: str = Field(pattern=r"^[1-9][0-9]{0,5}$")
+    # 运行方：这个分身在哪个应用里运行（现在只有 investment）。
+    # 取清单只给运行方是调用方自己的
+    runtime: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     pack: dict[str, Any]
     data_bindings: tuple[DataBinding, ...] = Field(default=(), max_length=64)
     rule_sources: tuple[RuleSource, ...] = Field(min_length=1, max_length=500)

@@ -94,7 +94,6 @@ DORMANT: tuple[Dormant, ...] = (
             for d in _domain_dirs()
         ),
     ),
-
     Dormant(
         name="web-interaction 运行时",
         kind="deliberate",
@@ -108,7 +107,6 @@ DORMANT: tuple[Dormant, ...] = (
             in _read("app/application/services/web_interaction.py")
         ),
     ),
-
 )
 
 

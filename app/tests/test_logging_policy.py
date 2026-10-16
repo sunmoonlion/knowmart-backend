@@ -13,7 +13,7 @@ import pytest
 @pytest.mark.parametrize("role", ["api", "worker", "scheduler", "direct_worker"])
 @pytest.mark.parametrize("level", ["INFO", "DEBUG"])
 def test_runtime_logging_policy(role, level):
-    code = r'''
+    code = r"""
 import asyncio
 import importlib
 import logging
@@ -72,7 +72,7 @@ async def inspect_engine():
     await pg.shutdown()
 
 asyncio.run(inspect_engine())
-'''
+"""
     # Only synthetic settings; never inherit credentials or a local .env file.
     result = subprocess.run(
         [sys.executable, "-c", code],

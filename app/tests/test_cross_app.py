@@ -124,7 +124,8 @@ def test_the_two_settings():
     )
     assert set(set_up.cross_app_sources()) == {"investment", "knowbase"}
     assert (
-        set_up.cross_app_targets()["knowfeed"].web_base_url == "https://knowfeed.example.test"
+        set_up.cross_app_targets()["knowfeed"].web_base_url
+        == "https://knowfeed.example.test"
     )
 
 

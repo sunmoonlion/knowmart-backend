@@ -103,7 +103,9 @@ async def test_summon_returns_only_the_owners_active_version() -> None:
     svc, repo = service()
     result = await deliver(svc, "delivery-0001", manifest())
     bot_id = str(result.knowbot_id)
-    found = await svc.summon(owner_subject=OWNER, knowbot_id=bot_id, version="1")
+    found = await svc.summon(
+        owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="investment"
+    )
     assert found.version.digest == result.digest
     assert found.version.manifest["pack"]["pack_id"] == "fin-forecast"
     for owner, knowbot, version in [
@@ -115,7 +117,12 @@ async def test_summon_returns_only_the_owners_active_version() -> None:
         ("", bot_id, "1"),
     ]:
         with pytest.raises(NotFoundError):
-            await svc.summon(owner_subject=owner, knowbot_id=knowbot, version=version)
+            await svc.summon(
+                owner_subject=owner,
+                knowbot_id=knowbot,
+                version=version,
+                runtime="investment",
+            )
 
 
 @pytest.mark.asyncio
@@ -127,7 +134,9 @@ async def test_stopped_version_cannot_be_summoned_and_others_cannot_stop() -> No
         await svc.stop(owner_subject=OTHER, knowbot_id=bot_id, version="1")
     await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1")
     with pytest.raises(NotFoundError):
-        await svc.summon(owner_subject=OWNER, knowbot_id=bot_id, version="1")
+        await svc.summon(
+            owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="investment"
+        )
     [bot] = await svc.list_for_owner(OWNER)
     assert bot.versions[0].status == "stopped"
 
@@ -144,3 +153,16 @@ async def test_list_shows_only_the_owners_knowbots() -> None:
     )
     assert [b.source_ref for b in await svc.list_for_owner(OWNER)] == ["lab-bot-1"]
     assert await svc.list_for_owner("bad owner") == []
+
+
+@pytest.mark.asyncio
+async def test_summon_only_serves_the_callers_own_runtime() -> None:
+    svc, repo = service()
+    result = await deliver(svc, "delivery-0001", manifest())
+    with pytest.raises(NotFoundError):
+        await svc.summon(
+            owner_subject=OWNER,
+            knowbot_id=str(result.knowbot_id),
+            version="1",
+            runtime="another-runtime",
+        )

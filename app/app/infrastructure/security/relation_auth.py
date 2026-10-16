@@ -1,11 +1,12 @@
 """按关系校验其他应用的服务令牌（SDD 0027 P1/P2）。
 
-knowmart 接受两种关系：knowlab 交付分身（deliver）、investment 取分身清单
-（summon）。每种关系一个调用方：受众是调用方的 client_id（Casdoor 给
-client_credentials 令牌的 aud），主体是 `admin/<调用方服务应用>`，令牌必须带这种
-关系的 scope。三项都由部署从调用方配置推出来，写进 `SERVICE_AUTH_<关系>_AUDIENCE`、
-`_SUBJECT_ALLOWLIST`、`_REQUIRED_SCOPE`（`common/backend/service-client`）。
-没配就是这种关系没开，一律拒绝。
+knowmart 接受两种关系：knowlab 交付分身（deliver）、运行方取分身清单（summon，
+现在只有 investment）。一种关系可以有多个调用方：`SERVICE_AUTH_<关系>_CALLERS`
+列出调用方，每个调用方一组 `SERVICE_AUTH_<关系>_<调用方>_AUDIENCE`（调用方的
+client_id，即 Casdoor 给 client_credentials 令牌的 aud）、`_SUBJECT_ALLOWLIST`
+（`admin/<调用方服务应用>`）、`_REQUIRED_SCOPE`（`knowmart:<关系>`），都由部署从
+调用方配置推出来（`common/backend/service-client`）。校验通过后返回调用方是谁，
+接口据此核运行方。一组都没配就是这种关系没开，一律拒绝。
 
 签名、签发方、有效期用模板的 OIDC 客户端核（与浏览器登录同一个 Casdoor、同一套
 密钥）。部署下发的 `SERVICE_AUTH_<关系>_DISCOVERY_URL`、`_BACKCHANNEL_ENDPOINT`
@@ -35,29 +36,51 @@ from core.config import Settings, get_settings
 Relation = Literal["deliver", "summon"]
 
 
+CALLER = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+
+
 @dataclass(frozen=True)
 class RelationBinding:
     relation: str
+    caller: str
     audience: str
     subjects: frozenset[str]
     required_scope: str
 
 
-def relation_binding(
+@dataclass(frozen=True)
+class ServiceCaller:
+    """通过校验的调用方：哪个应用、以哪种关系。"""
+
+    caller: str
+    principal: Principal
+
+
+def relation_bindings(
     relation: str, environ: Mapping[str, str] | None = None
-) -> RelationBinding | None:
+) -> list[RelationBinding]:
     env = os.environ if environ is None else environ
-    prefix = f"SERVICE_AUTH_{relation.upper()}_"
-    audience = env.get(prefix + "AUDIENCE", "").strip()
-    subjects = frozenset(
-        s.strip()
-        for s in env.get(prefix + "SUBJECT_ALLOWLIST", "").split(",")
-        if s.strip()
-    )
-    scope = env.get(prefix + "REQUIRED_SCOPE", "").strip()
-    if not audience or not subjects or scope != f"knowmart:{relation}":
-        return None
-    return RelationBinding(relation, audience, subjects, scope)
+    callers = [
+        c.strip()
+        for c in env.get(f"SERVICE_AUTH_{relation.upper()}_CALLERS", "").split(",")
+    ]
+    bindings: list[RelationBinding] = []
+    for caller in callers:
+        if not CALLER.fullmatch(caller):
+            continue
+        prefix = f"SERVICE_AUTH_{relation.upper()}_{caller.upper().replace('-', '_')}_"
+        audience = env.get(prefix + "AUDIENCE", "").strip()
+        subjects = frozenset(
+            s.strip()
+            for s in env.get(prefix + "SUBJECT_ALLOWLIST", "").split(",")
+            if s.strip()
+        )
+        scope = env.get(prefix + "REQUIRED_SCOPE", "").strip()
+        if audience and subjects and scope == f"knowmart:{relation}":
+            bindings.append(
+                RelationBinding(relation, caller, audience, subjects, scope)
+            )
+    return bindings
 
 
 class RelationServiceVerifier:
@@ -76,9 +99,9 @@ class RelationServiceVerifier:
             self._settings, self._settings.browser_profile("admin")
         )
 
-    async def verify(self, encoded: str) -> Principal:
-        binding = relation_binding(self._relation, self._environ)
-        if binding is None:
+    async def verify(self, encoded: str) -> ServiceCaller:
+        bindings = relation_bindings(self._relation, self._environ)
+        if not bindings:
             raise ServiceUnavailableError(
                 "This service relation is not configured",
                 code="service_relation_unconfigured",
@@ -87,9 +110,24 @@ class RelationServiceVerifier:
             raise UnauthorizedError(
                 "The service identity token is invalid", code="token_invalid"
             )
-        claims = await self._oidc.verify_access_token(
-            encoded, audience=binding.audience
-        )
+        # 受众就是调用方的 client_id：逐个调用方试，签名、签发方、有效期每次都核
+        claims: dict[str, Any] | None = None
+        binding = bindings[0]
+        for candidate in bindings:
+            try:
+                claims = await self._oidc.verify_access_token(
+                    encoded, audience=candidate.audience
+                )
+            except UnauthorizedError as exc:
+                if exc.code == "audience_mismatch":
+                    continue
+                raise
+            binding = candidate
+            break
+        if claims is None:
+            raise UnauthorizedError(
+                "The service identity audience is invalid", code="audience_mismatch"
+            )
         subject = claims.get("sub")
         issuer = claims.get("iss")
         if not isinstance(subject, str) or not isinstance(issuer, str) or not issuer:
@@ -106,17 +144,20 @@ class RelationServiceVerifier:
                 "The service identity scope is not authorized",
                 code="service_scope_denied",
             )
-        return Principal(
-            actor_type="service",
-            subject=subject,
-            issuer=issuer,
-            app=self._settings.app_slug,
-            surface="internal",
-            audience=binding.audience,
-            scopes=frozenset({binding.required_scope}),
-            authenticated_at=_timestamp(claims.get("iat")),
-            expires_at=_timestamp(claims.get("exp")),
-            policy_version="service-v1",
+        return ServiceCaller(
+            caller=binding.caller,
+            principal=Principal(
+                actor_type="service",
+                subject=subject,
+                issuer=issuer,
+                app=self._settings.app_slug,
+                surface="internal",
+                audience=binding.audience,
+                scopes=frozenset({binding.required_scope}),
+                authenticated_at=_timestamp(claims.get("iat")),
+                expires_at=_timestamp(claims.get("exp")),
+                policy_version="service-v1",
+            ),
         )
 
 
@@ -164,11 +205,11 @@ def relation_verifier(relation: Relation) -> RelationServiceVerifier:
 
 async def require_deliver_service(
     authorization: str | None = Header(default=None, alias="Authorization"),
-) -> Principal:
+) -> ServiceCaller:
     return await relation_verifier("deliver").verify(_bearer(authorization))
 
 
 async def require_summon_service(
     authorization: str | None = Header(default=None, alias="Authorization"),
-) -> Principal:
+) -> ServiceCaller:
     return await relation_verifier("summon").verify(_bearer(authorization))

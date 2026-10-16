@@ -21,6 +21,7 @@ from app.bootstrap.knowbots import knowbot_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.security import BrowserSession, Principal
 from app.infrastructure.security.relation_auth import (
+    ServiceCaller,
     require_deliver_service,
     require_summon_service,
 )
@@ -72,7 +73,7 @@ class SummonReturnIn(Strict):
 
 @internal_router.post("/deliveries")
 async def deliver(
-    _: Annotated[Principal, Depends(require_deliver_service)],
+    _: Annotated[ServiceCaller, Depends(require_deliver_service)],
     body: DeliveryIn,
     svc: Service,
 ) -> JSONResponse:
@@ -108,18 +109,21 @@ def _split_ref(ref: str) -> tuple[str, str]:
 
 @internal_router.get("/owners/{owner_subject}/knowbots/{knowbot_ref}")
 async def summon(
-    _: Annotated[Principal, Depends(require_summon_service)],
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
     svc: Service,
     owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
     knowbot_ref: Annotated[str, Path(min_length=3, max_length=160)],
 ) -> JSONResponse:
-    """工作台「请」：这个所有者的这一版清单原文与摘要。
+    """运行方「请」：这个所有者的这一版清单原文与摘要。
 
-    别人的、停用的、没有的，都是 404。
+    别人的、停用的、没有的、运行方不是这个调用方的，都是 404。
     """
     knowbot_id, version = _split_ref(knowbot_ref)
     found = await svc.summon(
-        owner_subject=owner_subject, knowbot_id=knowbot_id, version=version
+        owner_subject=owner_subject,
+        knowbot_id=knowbot_id,
+        version=version,
+        runtime=caller.caller,
     )
     return JSONResponse(
         content={
@@ -193,21 +197,26 @@ async def summon_return(
     knowbot_id: Annotated[str, Path(max_length=64)],
     version: Annotated[str, Path(max_length=16)],
 ) -> JSONResponse:
-    """「请这位」：核验是自己的、未停用的这一版，带上 knowbot=<分身>@<版本> 回去。
+    """「请这位」：核验是自己的、未停用的、运行方是来源应用的这一版，带上
+    knowbot=<分身>@<版本> 回去。
 
     回跳地址按 from 只从本应用配置里查，链接里带的任何地址都不用（跨应用跳转规则）。
     对方收到后还会按自己的会话向这里的内部接口再核一次，伪造参数只会得到「找不到」。
     """
-    found = await svc.summon(
-        owner_subject=session.principal.subject, knowbot_id=knowbot_id, version=version
-    )
     sources = settings.cross_app_sources()
     origin = clean_origin(body.source, body.ref, known_apps=known_apps(sources))
     target = return_url(sources.get(origin.app) if origin else None, origin)
-    if target is None:
+    if origin is None or target is None:
         raise BadRequestError(
             "There is no registered place to return to", code="no_return_target"
         )
+    # 从哪个运行方来，就只能选运行方是它的分身
+    found = await svc.summon(
+        owner_subject=session.principal.subject,
+        knowbot_id=knowbot_id,
+        version=version,
+        runtime=origin.app,
+    )
     return JSONResponse(
         content={
             "contract_version": CONTRACT_VERSION,

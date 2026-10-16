@@ -151,14 +151,21 @@ class KnowbotService:
         return bot
 
     async def summon(
-        self, *, owner_subject: str, knowbot_id: str, version: str
+        self,
+        *,
+        owner_subject: str,
+        knowbot_id: str,
+        version: str,
+        runtime: str,
     ) -> SummonedVersion:
-        """工作台「请」：只给所有者自己的、未停用的这一版。"""
+        """运行方「请」：只给所有者自己的、未停用的、运行方是这个调用方的这一版。"""
         bot = await self._owned(owner_subject, knowbot_id)
         if not VERSION.fullmatch(version or ""):
             raise _not_found()
         found = await self.repo.get_version(bot.id, version)
         if found is None or found.status != "active":
+            raise _not_found()
+        if found.manifest.get("runtime") != runtime:
             raise _not_found()
         return SummonedVersion(
             knowbot_id=bot.id, name=bot.name, tagline=bot.tagline, version=found
@@ -182,6 +189,7 @@ class KnowbotService:
 def version_view(record: KnowbotVersionRecord) -> dict[str, Any]:
     return {
         "version": record.version,
+        "runtime": record.manifest.get("runtime"),
         "digest": record.digest,
         "status": record.status,
         "delivered_at": record.delivered_at.isoformat(),

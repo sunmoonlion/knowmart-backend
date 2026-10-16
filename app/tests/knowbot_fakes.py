@@ -23,6 +23,7 @@ def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
         "name": "财务分析与预测",
         "tagline": "按我的方法分析一家公司的财报",
         "version": version,
+        "runtime": "investment",
         "pack": {
             "pack_id": "fin-forecast",
             "version": version,

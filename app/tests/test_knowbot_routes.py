@@ -8,6 +8,7 @@ import pytest
 import app.interfaces.http.middleware.auth as auth_middleware
 from app.application.services.knowbot_service import KnowbotService
 from app.infrastructure.security.relation_auth import (
+    ServiceCaller,
     require_deliver_service,
     require_summon_service,
 )
@@ -28,8 +29,8 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     fake_auth = FakeAuthService({"member": session("web", "profile:read")})
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_auth)
     app.dependency_overrides[knowbot_routes.service] = lambda: svc
-    app.dependency_overrides[require_deliver_service] = lambda: "knowlab"
-    app.dependency_overrides[require_summon_service] = lambda: "investment"
+    app.dependency_overrides[require_deliver_service] = lambda: _caller("knowlab")
+    app.dependency_overrides[require_summon_service] = lambda: _caller("investment")
     app.dependency_overrides[knowbot_routes.knowbot_settings] = lambda: (
         settings.model_copy(
             update={
@@ -42,6 +43,10 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     )
     yield svc, repo
     app.dependency_overrides.clear()
+
+
+def _caller(name: str) -> ServiceCaller:
+    return ServiceCaller(caller=name, principal=None)  # type: ignore[arg-type]
 
 
 def client() -> httpx.AsyncClient:
@@ -101,6 +106,10 @@ async def test_summon_is_owner_scoped_and_hides_others(wired) -> None:
             f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{knowbot}",
         ):
             assert (await c.get(path)).status_code == 404
+        # 运行方不是这个调用方的分身，同样拿不到
+        app.dependency_overrides[require_summon_service] = lambda: _caller("another")
+        mine = f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{knowbot}@1"
+        assert (await c.get(mine)).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -132,6 +141,7 @@ async def test_my_knowbots_lists_only_the_session_owner(wired) -> None:
         assert [k["name"] for k in listed] == ["财务分析与预测"]
         assert "manifest" not in listed[0]
         assert listed[0]["versions"][0]["status"] == "active"
+        assert listed[0]["versions"][0]["runtime"] == "investment"
 
 
 @pytest.mark.asyncio

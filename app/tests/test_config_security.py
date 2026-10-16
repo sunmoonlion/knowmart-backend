@@ -19,9 +19,7 @@ def production_settings(**overrides: object) -> Settings:
         "admin_frontend_allowed_origins": "https://admin.example.test",
         "web_casdoor_client_id": "knowmart-web-client",
         "web_casdoor_client_secret": "web-test-secret",
-        "web_casdoor_redirect_uri": (
-            "https://web.example.test/api/auth/web/callback"
-        ),
+        "web_casdoor_redirect_uri": ("https://web.example.test/api/auth/web/callback"),
         "web_frontend_base_url": "https://web.example.test",
         "web_frontend_allowed_origins": "https://web.example.test",
         "allowed_hosts": "admin.example.test,web.example.test",

@@ -11,21 +11,24 @@ from app.application.errors.exceptions import (
 )
 from app.infrastructure.security.relation_auth import (
     RelationServiceVerifier,
-    relation_binding,
+    relation_bindings,
 )
 from app.main import settings
 
 ENV = {
-    "SERVICE_AUTH_SUMMON_AUDIENCE": "sunmoon-investment-knowmart-summon",
-    "SERVICE_AUTH_SUMMON_SUBJECT_ALLOWLIST": (
+    "SERVICE_AUTH_SUMMON_CALLERS": "investment",
+    "SERVICE_AUTH_SUMMON_INVESTMENT_AUDIENCE": "sunmoon-investment-knowmart-summon",
+    "SERVICE_AUTH_SUMMON_INVESTMENT_SUBJECT_ALLOWLIST": (
         "admin/sunmoonai-investment-knowmart-summon"
     ),
-    "SERVICE_AUTH_SUMMON_REQUIRED_SCOPE": "knowmart:summon",
+    "SERVICE_AUTH_SUMMON_INVESTMENT_REQUIRED_SCOPE": "knowmart:summon",
 }
 
 
 class FakeOidc:
-    def __init__(self, **claims: object) -> None:
+    def __init__(
+        self, aud: str = "sunmoon-investment-knowmart-summon", **claims: object
+    ) -> None:
         now = int(time.time())
         self.claims = {
             "iss": "https://identity.example.test",
@@ -34,10 +37,13 @@ class FakeOidc:
             "iat": now,
             "exp": now + 900,
         } | claims
-        self.audience: str | None = None
+        self.aud = aud
+        self.tried: list[str] = []
 
     async def verify_access_token(self, encoded: str, *, audience: str) -> dict:
-        self.audience = audience
+        self.tried.append(audience)
+        if audience != self.aud:
+            raise UnauthorizedError("wrong audience", code="audience_mismatch")
         return dict(self.claims)
 
 
@@ -50,28 +56,26 @@ def verifier(oidc: FakeOidc, env: dict | None = None) -> RelationServiceVerifier
     )
 
 
-def test_binding_needs_all_three_and_the_matching_scope() -> None:
-    assert relation_binding("summon", ENV) is not None
-    assert relation_binding("deliver", ENV) is None
-    assert (
-        relation_binding(
-            "summon", ENV | {"SERVICE_AUTH_SUMMON_REQUIRED_SCOPE": "knowmart:deliver"}
-        )
-        is None
-    )
-    assert (
-        relation_binding("summon", ENV | {"SERVICE_AUTH_SUMMON_SUBJECT_ALLOWLIST": " "})
-        is None
-    )
+def test_bindings_need_all_three_and_the_matching_scope() -> None:
+    assert [b.caller for b in relation_bindings("summon", ENV)] == ["investment"]
+    assert relation_bindings("deliver", ENV) == []
+    bad_scope = ENV | {
+        "SERVICE_AUTH_SUMMON_INVESTMENT_REQUIRED_SCOPE": "knowmart:deliver"
+    }
+    assert relation_bindings("summon", bad_scope) == []
+    no_subject = ENV | {"SERVICE_AUTH_SUMMON_INVESTMENT_SUBJECT_ALLOWLIST": " "}
+    assert relation_bindings("summon", no_subject) == []
+    assert relation_bindings("summon", ENV | {"SERVICE_AUTH_SUMMON_CALLERS": ""}) == []
 
 
 @pytest.mark.asyncio
 async def test_bound_subject_with_scope_is_accepted_with_the_callers_audience() -> None:
     oidc = FakeOidc()
-    principal = await verifier(oidc).verify("token")
-    assert oidc.audience == "sunmoon-investment-knowmart-summon"
-    assert principal.actor_type == "service" and principal.surface == "internal"
-    assert principal.scopes == frozenset({"knowmart:summon"})
+    caller = await verifier(oidc).verify("token")
+    assert caller.caller == "investment"
+    assert oidc.tried == ["sunmoon-investment-knowmart-summon"]
+    assert caller.principal.actor_type == "service"
+    assert caller.principal.scopes == frozenset({"knowmart:summon"})
 
 
 @pytest.mark.asyncio
@@ -102,3 +106,39 @@ async def test_empty_or_oversized_tokens_are_rejected() -> None:
     for token in ("", "x" * 16385):
         with pytest.raises(UnauthorizedError):
             await verifier(FakeOidc()).verify(token)
+
+
+TWO_CALLERS = ENV | {
+    "SERVICE_AUTH_SUMMON_CALLERS": "investment,other-runtime",
+    "SERVICE_AUTH_SUMMON_OTHER_RUNTIME_AUDIENCE": (
+        "sunmoon-other-runtime-knowmart-summon"
+    ),
+    "SERVICE_AUTH_SUMMON_OTHER_RUNTIME_SUBJECT_ALLOWLIST": (
+        "admin/sunmoonai-other-runtime-knowmart-summon"
+    ),
+    "SERVICE_AUTH_SUMMON_OTHER_RUNTIME_REQUIRED_SCOPE": "knowmart:summon",
+}
+
+
+@pytest.mark.asyncio
+async def test_the_caller_is_recognised_among_several() -> None:
+    oidc = FakeOidc(
+        aud="sunmoon-other-runtime-knowmart-summon",
+        sub="admin/sunmoonai-other-runtime-knowmart-summon",
+    )
+    caller = await verifier(oidc, env=TWO_CALLERS).verify("token")
+    assert caller.caller == "other-runtime"
+
+
+@pytest.mark.asyncio
+async def test_a_caller_cannot_use_another_callers_subject() -> None:
+    # investment 的受众配上另一个运行方的主体：主体不在 investment 的名单里
+    oidc = FakeOidc(sub="admin/sunmoonai-other-runtime-knowmart-summon")
+    with pytest.raises(ForbiddenError):
+        await verifier(oidc, env=TWO_CALLERS).verify("token")
+
+
+@pytest.mark.asyncio
+async def test_unknown_audience_is_rejected() -> None:
+    with pytest.raises(UnauthorizedError):
+        await verifier(FakeOidc(aud="someone-else")).verify("token")
