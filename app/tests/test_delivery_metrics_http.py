@@ -131,7 +131,7 @@ async def test_rejected_identity_never_accesses_database(
     monkeypatch.setattr(endpoint, "get_postgres", forbidden_database)
     headers = {
         "missing": {},
-        "cookie": {"Cookie": "sunmoonai_tpl_admin_sid=admin-session"},
+        "cookie": {"Cookie": "sunmoonai_knowmart_admin_sid=admin-session"},
         "basic": {"Authorization": "Basic not-a-service-token"},
         "malformed": {"Authorization": "Bearer token extra"},
         "signature": identity(invalid_signature=True),

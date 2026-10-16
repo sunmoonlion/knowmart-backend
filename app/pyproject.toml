@@ -1,5 +1,5 @@
 [project]
-name = "tpl-backend"
+name = "knowmart-backend"
 version = "2.0.0"
 description = "Admin 与 Web 共用的生产级 FastAPI 后端模板"
 requires-python = ">=3.12"

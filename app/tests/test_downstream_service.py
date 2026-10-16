@@ -22,7 +22,7 @@ def settings() -> Settings:
         _env_file=None,
         env="test",
         downstream_base_url="http://research-backend:8000",
-        downstream_client_id="tpl-service",
+        downstream_client_id="knowmart-service",
         downstream_client_secret="test-only-secret",
         downstream_scope="research:runs:read",
         downstream_allowed_path_prefixes="/api/internal/v1",
@@ -47,7 +47,7 @@ async def test_downstream_uses_service_identity_and_route_allowlist() -> None:
         "GET", "/api/internal/v1/runs/1", operation_id="op-downstream-1"
     )
     assert result == {"contract_version": 1}
-    assert oidc.calls[0]["client_id"] == "tpl-service"
+    assert oidc.calls[0]["client_id"] == "knowmart-service"
     assert requests[0].headers["authorization"] == "Bearer server-only-token"
     assert requests[0].headers["x-operation-id"] == "op-downstream-1"
 

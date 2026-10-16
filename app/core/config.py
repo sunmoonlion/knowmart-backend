@@ -43,9 +43,9 @@ class Settings(BaseSettings):
 
     env: str = "development"
     log_level: str = "INFO"
-    service_name: str = "tpl-backend"
+    service_name: str = "knowmart-backend"
     deployment_id: str = "local"
-    app_slug: str = "tpl"
+    app_slug: str = "knowmart"
 
     # 跨应用跳转（app/domain/cross_app.py）。都可不配：不配就是不带人来、也不带人去。
     # 哪些应用可以把用户带到这里，各自的回跳地址。回跳地址只从这里取，从不从链接里取。
@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     #   {"knowfeed": {"web_base_url": "https://knowfeed.example"}}
     cross_app_targets_json: str = "{}"
 
-    database_url: str = "postgresql+asyncpg://tpl:tpl@localhost:5432/tpl"
+    database_url: str = "postgresql+asyncpg://knowmart:knowmart@localhost:5432/knowmart"
     migration_database_url: str | None = None
 
     redis_host: str = "localhost"
@@ -79,8 +79,8 @@ class Settings(BaseSettings):
     admin_casdoor_client_id: str = ""
     admin_casdoor_client_secret: str = ""
     admin_casdoor_redirect_uri: str = ""
-    admin_casdoor_application: str = "sunmoonai-tpl-admin"
-    admin_auth_policy_version: str = "tpl-admin-v2"
+    admin_casdoor_application: str = "sunmoonai-knowmart-admin"
+    admin_auth_policy_version: str = "knowmart-admin-v2"
     admin_auth_role_allowlist: str = ""
     admin_auth_scope_allowlist: str = ""
     admin_frontend_base_url: str = "http://localhost:5173"
@@ -91,8 +91,8 @@ class Settings(BaseSettings):
     web_casdoor_client_id: str = ""
     web_casdoor_client_secret: str = ""
     web_casdoor_redirect_uri: str = ""
-    web_casdoor_application: str = "sunmoonai-tpl-web"
-    web_auth_policy_version: str = "tpl-web-v2"
+    web_casdoor_application: str = "sunmoonai-knowmart-web"
+    web_auth_policy_version: str = "knowmart-web-v2"
     web_auth_role_allowlist: str = ""
     web_auth_scope_allowlist: str = ""
     web_frontend_base_url: str = "http://localhost:3000"
@@ -133,7 +133,7 @@ class Settings(BaseSettings):
         default=None, validation_alias="CELERY_BROKER_URL"
     )
     celery_queue: str = Field(
-        default="tpl.default",
+        default="knowmart.default",
         validation_alias=AliasChoices("CELERY_QUEUE", "CELERY_TASK_DEFAULT_QUEUE"),
     )
     celery_result_backend: str | None = Field(

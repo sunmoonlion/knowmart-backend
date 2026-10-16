@@ -1,6 +1,6 @@
 # Backend 异步任务与运行角色
 
-`tpl-backend` 是统一后端源码，也是唯一后端镜像来源。部署时按职责启动四类独立工作负载：
+`knowmart-backend` 是统一后端源码，也是唯一后端镜像来源。部署时按职责启动四类独立工作负载：
 
 | 角色 | 启动入口 | 职责 | 是否接收 HTTP 业务流量 |
 |---|---|---|---|
@@ -9,7 +9,7 @@
 | Scheduler | `python -m app.bootstrap.scheduler` | 周期任务调度 | 否 |
 | Migration | `python -m app.bootstrap.migration` | Alembic 升级门禁，执行后退出 | 否 |
 
-四个角色必须使用同一构建产物，但分别配置 Deployment/Job、ServiceAccount、资源限额、扩缩容与网络权限。不要创建独立 Worker 源码仓库，也不要恢复旧的 `celeryworker-tpl-admin-backend` 或 `nodebullworker-tpl-web-backend` 目录。
+四个角色必须使用同一构建产物，但分别配置 Deployment/Job、ServiceAccount、资源限额、扩缩容与网络权限。不要创建独立 Worker 源码仓库，也不要恢复旧的 `celeryworker-knowmart-admin-backend` 或 `nodebullworker-knowmart-web-backend` 目录。
 
 ## Broker 与最小权限
 

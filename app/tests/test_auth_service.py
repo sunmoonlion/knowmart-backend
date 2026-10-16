@@ -53,7 +53,7 @@ class FakeOidc:
             "exp": now + 600,
             "name": "Test User",
             "roles": ["editor", "provider-admin"],
-            "scope": "profile:read root:all tpl:admin",
+            "scope": "profile:read root:all knowmart:admin",
         }
 
 
@@ -82,20 +82,20 @@ class StubAuthService(AuthService):
             "display_name": "Test User",
             "email": "user@example.test",
             "roles": ["editor"],
-            "scopes": ["profile:read", "tpl:admin"],
+            "scopes": ["profile:read", "knowmart:admin"],
         }
 
 
 def settings() -> Settings:
     return Settings(
         _env_file=None,
-        admin_casdoor_client_id="tpl-admin-client",
+        admin_casdoor_client_id="knowmart-admin-client",
         admin_casdoor_client_secret="admin-secret",
         admin_casdoor_redirect_uri="https://admin.example.test/api/auth/admin/callback",
         admin_frontend_base_url="https://admin.example.test",
         admin_auth_role_allowlist="editor,member",
-        admin_auth_scope_allowlist="tpl:admin,profile:read",
-        web_casdoor_client_id="tpl-web-client",
+        admin_auth_scope_allowlist="knowmart:admin,profile:read",
+        web_casdoor_client_id="knowmart-web-client",
         web_casdoor_client_secret="web-secret",
         web_casdoor_redirect_uri="https://web.example.test/api/auth/web/callback",
         web_frontend_base_url="https://web.example.test",
@@ -199,7 +199,7 @@ async def test_policy_or_surface_change_invalidates_existing_session(
             actor_type="user",
             subject="user-123",
             issuer="https://identity.example.test",
-            app="tpl",
+            app="knowmart",
             surface="admin",
             audience=profile.client_id,
             actor_id=uuid.UUID("00000000-0000-4000-8000-000000000001"),

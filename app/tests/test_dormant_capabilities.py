@@ -11,7 +11,7 @@
                       类改名），此时 ``still_dormant`` 会因为"找不到"而假性通过。
                       这是本项目反复踩过的坑：把"没找到"当成"不存在"。
   ``still_dormant``   还休眠着吗。为 False 说明**能力已接线**，声明过期——
-                      要删掉本条，并同步更新 `repos/tpl-app.md`「已知未实现」。
+                      要删掉本条，并同步更新 `repos/knowmart-app.md`「已知未实现」。
 
 **机制的边界**：它保证**已声明的条目不会变陈旧**，但**发现不了新出现的休眠能力**
 ——那需要判断"这段代码本该接线却没接"，不可机械判定。新增休眠能力时手工加一条。
@@ -133,7 +133,7 @@ def test_declared_dormant_capability_is_still_dormant(item: Dormant) -> None:
     assert item.still_dormant(), (
         f"休眠声明「{item.name}」已不成立——该能力看起来已接线。"
         f"请删掉本条声明，并同步更新 k8s:docs/project-guide/"
-        f"repos/tpl-app.md 的「已知未实现」一节。依据：{item.evidence}"
+        f"repos/knowmart-app.md 的「已知未实现」一节。依据：{item.evidence}"
     )
 
 

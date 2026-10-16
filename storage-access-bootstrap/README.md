@@ -1,6 +1,6 @@
 # storage-access-bootstrap（统一 Backend）
 
-为 `tpl-backend` 声明对象存储访问关系。声明文件位于 `config/access.json`，默认生成 `tpl-backend-s3` Secret/ConfigMap。
+为 `knowmart-backend` 声明对象存储访问关系。声明文件位于 `config/access.json`，默认生成 `knowmart-backend-s3` Secret/ConfigMap。
 
 ```bash
 ./storage-access-bootstrap.sh --cluster KIND

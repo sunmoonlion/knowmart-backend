@@ -60,7 +60,7 @@ def session(surface: str, *scopes: str) -> BrowserSession:
             actor_type="user",
             subject="user-123",
             issuer="https://identity.example.test",
-            app="tpl",
+            app="knowmart",
             surface=surface,  # type: ignore[arg-type]
             audience=profile.client_id or f"{surface}-client",
             actor_id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
@@ -80,7 +80,7 @@ def session(surface: str, *scopes: str) -> BrowserSession:
 async def test_admin_and_web_me_use_distinct_cookies_and_minimal_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_admin = FakeAuthService({"admin-session": session("admin", "tpl:admin")})
+    fake_admin = FakeAuthService({"admin-session": session("admin", "knowmart:admin")})
     fake_web = FakeAuthService({"web-session": session("web", "profile:read")})
     monkeypatch.setattr(auth_middleware, "admin_auth_service", fake_admin)
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_web)
@@ -92,14 +92,14 @@ async def test_admin_and_web_me_use_distinct_cookies_and_minimal_claims(
         transport=transport, base_url="http://testserver"
     ) as client:
         assert (await client.get("/api/auth/admin/me")).status_code == 401
-        client.cookies.set("sunmoonai_tpl_admin_sid", "admin-session")
+        client.cookies.set("sunmoonai_knowmart_admin_sid", "admin-session")
         admin_response = await client.get("/api/auth/admin/me")
         assert admin_response.status_code == 200
         assert admin_response.json()["user"]["surface"] == "admin"
 
         # An Admin cookie must not authorize the Web surface.
         assert (await client.get("/api/auth/web/me")).status_code == 401
-        client.cookies.set("sunmoonai_tpl_web_sid", "web-session")
+        client.cookies.set("sunmoonai_knowmart_web_sid", "web-session")
         web_response = await client.get("/api/auth/web/me")
         assert web_response.status_code == 200
         assert web_response.json()["user"]["surface"] == "web"
@@ -128,7 +128,7 @@ async def test_logout_is_post_only_and_surface_csrf_protected(
     async with httpx.AsyncClient(
         transport=transport, base_url="http://testserver"
     ) as client:
-        client.cookies.set("sunmoonai_tpl_web_sid", "member")
+        client.cookies.set("sunmoonai_knowmart_web_sid", "member")
         assert (await client.get("/api/auth/web/logout")).status_code == 405
         assert (await client.post("/api/auth/web/logout")).status_code == 403
         allowed = await client.post(

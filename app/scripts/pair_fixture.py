@@ -51,17 +51,17 @@ def _principal(surface: str, *, operator: bool = False) -> Principal:
         actor_type="user",
         subject=f"pair-{surface}-subject",
         issuer="https://identity.example.test",
-        app="tpl",
+        app="knowmart",
         surface=surface,  # type: ignore[arg-type]
-        audience=f"tpl-{surface}-pair",
+        audience=f"knowmart-{surface}-pair",
         actor_id=UUID("b42cf3bb-d63e-5df5-a884-9c34286f2608"),
         display_name="Paired E2E User",
         email=f"{surface}@example.test",
         roles=roles,
-        scopes=frozenset({"tpl:admin"}) if surface == "admin" else frozenset(),
+        scopes=frozenset({"knowmart:admin"}) if surface == "admin" else frozenset(),
         authenticated_at=now,
         expires_at=now + timedelta(hours=1),
-        policy_version=f"tpl-{surface}-v2",
+        policy_version=f"knowmart-{surface}-v2",
     )
 
 
@@ -100,7 +100,7 @@ async def health() -> dict[str, str]:
 
 @app.get("/api/auth/admin/me", response_model=None)
 async def admin_me(
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_admin_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_admin_sid"),
 ) -> Response | dict[str, object]:
     if session_id not in {"e2e-session", "operator-session"}:
         return _error(401, "auth_required")
@@ -111,7 +111,7 @@ async def admin_me(
 
 @app.get("/api/auth/web/me", response_model=None)
 async def web_me(
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
 ) -> Response | dict[str, object]:
     if session_id != "e2e-session":
         return _error(401, "auth_required")
@@ -127,14 +127,14 @@ async def logout(
 ) -> Response:
     if surface not in {"admin", "web"} or not _csrf_allowed(request, csrf_token):
         return _error(403, "forbidden")
-    response.delete_cookie(f"sunmoonai_tpl_{surface}_sid", path="/")
+    response.delete_cookie(f"sunmoonai_knowmart_{surface}_sid", path="/")
     return response
 
 
 @app.get("/api/web/v1/runs/{run_id}", response_model=None)
 async def get_run(
     run_id: str,
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
 ) -> Response | dict[str, object]:
     if session_id != "e2e-session":
         return _error(401, "auth_required")
@@ -145,7 +145,7 @@ async def get_run(
 @app.get("/api/web/v1/runs/{run_id}/events")
 async def stream_run(
     run_id: str,
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
 ) -> Response:
     if session_id != "e2e-session":
         return _error(401, "auth_required")
@@ -167,7 +167,7 @@ async def submit_action(
     run_id: str,
     command: RunAction,
     request: Request,
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
     csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
 ) -> Response | dict[str, object]:
     if session_id != "e2e-session":
@@ -181,7 +181,7 @@ async def submit_action(
 @app.get("/api/web/v1/citations/{evidence_id}/source")
 async def citation_source(
     evidence_id: str,
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
 ) -> Response:
     if session_id != "e2e-session":
         return _error(401, "auth_required")
@@ -192,7 +192,7 @@ async def citation_source(
 @app.get("/api/web/v1/reference/sources/{evidence_id}", response_model=None)
 async def reference_source(
     evidence_id: str,
-    session_id: str | None = Cookie(default=None, alias="sunmoonai_tpl_web_sid"),
+    session_id: str | None = Cookie(default=None, alias="sunmoonai_knowmart_web_sid"),
 ) -> Response | dict[str, str]:
     if session_id != "e2e-session":
         return _error(401, "auth_required")

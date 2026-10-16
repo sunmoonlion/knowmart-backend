@@ -21,12 +21,12 @@ def settings() -> Settings:
         _env_file=None,
         env="production",
         casdoor_endpoint="https://identity.example.test",
-        admin_casdoor_client_id="tpl-admin-client",
+        admin_casdoor_client_id="knowmart-admin-client",
         admin_casdoor_client_secret="admin-secret",
         admin_casdoor_redirect_uri="https://admin.example.test/api/auth/admin/callback",
         admin_frontend_base_url="https://admin.example.test",
         admin_frontend_allowed_origins="https://admin.example.test",
-        web_casdoor_client_id="tpl-web-client",
+        web_casdoor_client_id="knowmart-web-client",
         web_casdoor_client_secret="web-secret",
         web_casdoor_redirect_uri="https://web.example.test/api/auth/web/callback",
         web_frontend_base_url="https://web.example.test",
@@ -90,7 +90,7 @@ def client(surface: str, encoded: str, key: RSAKey) -> OidcProviderClient:
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("surface", "audience"),
-    [("admin", "tpl-admin-client"), ("web", "tpl-web-client")],
+    [("admin", "knowmart-admin-client"), ("web", "knowmart-web-client")],
 )
 async def test_each_surface_verifies_its_own_audience(
     surface: str, audience: str
@@ -107,7 +107,7 @@ async def test_each_surface_verifies_its_own_audience(
 async def test_admin_token_cannot_be_replayed_at_web_client() -> None:
     key = RSAKey.generate_key(parameters={"kid": "test-key"})
     with pytest.raises(UnauthorizedError) as error:
-        oidc = client("web", token(key, "tpl-admin-client"), key)
+        oidc = client("web", token(key, "knowmart-admin-client"), key)
         await oidc.exchange_authorization_code(
             code="code", code_verifier="verifier-123", nonce="nonce-123"
         )
@@ -117,13 +117,13 @@ async def test_admin_token_cannot_be_replayed_at_web_client() -> None:
 @pytest.mark.asyncio
 async def test_signup_is_web_only_and_uses_provider_signup_endpoint() -> None:
     key = RSAKey.generate_key(parameters={"kid": "test-key"})
-    web_client = client("web", token(key, "tpl-web-client"), key)
+    web_client = client("web", token(key, "knowmart-web-client"), key)
     url = await web_client.build_authorization_url(
         state="state", nonce="nonce-123", code_challenge="challenge", mode="signup"
     )
     assert urlsplit(url).path == "/signup/oauth/authorize"
     with pytest.raises(UnauthorizedError):
-        admin_client = client("admin", token(key, "tpl-admin-client"), key)
+        admin_client = client("admin", token(key, "knowmart-admin-client"), key)
         await admin_client.build_authorization_url(
             state="state", nonce="nonce-123", code_challenge="challenge", mode="signup"
         )

@@ -10,14 +10,14 @@ def production_settings(**overrides: object) -> Settings:
         "_env_file": None,
         "env": "production",
         "casdoor_endpoint": "https://identity.example.test",
-        "admin_casdoor_client_id": "tpl-admin-client",
+        "admin_casdoor_client_id": "knowmart-admin-client",
         "admin_casdoor_client_secret": "admin-test-secret",
         "admin_casdoor_redirect_uri": (
             "https://admin.example.test/api/auth/admin/callback"
         ),
         "admin_frontend_base_url": "https://admin.example.test",
         "admin_frontend_allowed_origins": "https://admin.example.test",
-        "web_casdoor_client_id": "tpl-web-client",
+        "web_casdoor_client_id": "knowmart-web-client",
         "web_casdoor_client_secret": "web-test-secret",
         "web_casdoor_redirect_uri": (
             "https://web.example.test/api/auth/web/callback"
@@ -40,8 +40,8 @@ def test_one_settings_root_exposes_isolated_browser_profiles() -> None:
     assert admin.client_secret != web.client_secret
     assert admin.redirect_uri.endswith("/api/auth/admin/callback")
     assert web.redirect_uri.endswith("/api/auth/web/callback")
-    assert admin.session_cookie_name == "sunmoonai_tpl_admin_sid"
-    assert web.session_cookie_name == "sunmoonai_tpl_web_sid"
+    assert admin.session_cookie_name == "sunmoonai_knowmart_admin_sid"
+    assert web.session_cookie_name == "sunmoonai_knowmart_web_sid"
     assert admin.session_key_prefix != web.session_key_prefix
     assert settings.frontend_origin_list == (
         "https://admin.example.test",
@@ -53,18 +53,18 @@ def test_database_urls_use_asyncpg_and_drop_sslmode() -> None:
     settings = Settings(
         _env_file=None,
         database_url=(
-            "postgresql://tpl:secret@postgresql:5432/tpl?"
-            "sslmode=disable&application_name=tpl"
+            "postgresql://knowmart:secret@postgresql:5432/knowmart?"
+            "sslmode=disable&application_name=knowmart"
         ),
         migration_database_url=(
-            "postgresql://migrator:secret@postgresql:5432/tpl?sslmode=require"
+            "postgresql://migrator:secret@postgresql:5432/knowmart?sslmode=require"
         ),
     )
     assert settings.database_url == (
-        "postgresql+asyncpg://tpl:secret@postgresql:5432/tpl?application_name=tpl"
+        "postgresql+asyncpg://knowmart:secret@postgresql:5432/knowmart?application_name=knowmart"
     )
     assert settings.migration_url == (
-        "postgresql+asyncpg://migrator:secret@postgresql:5432/tpl"
+        "postgresql+asyncpg://migrator:secret@postgresql:5432/knowmart"
     )
 
 

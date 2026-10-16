@@ -4,13 +4,13 @@ from app.infrastructure.messaging.celery_producer import (
     CeleryNotConfiguredError,
     get_celery_producer,
 )
-from app.interfaces.http.middleware.auth import require_tpl_admin
+from app.interfaces.http.middleware.auth import require_knowmart_admin
 from core.config import get_settings
 
 router = APIRouter(
     prefix="/admin/v1/diagnostics/tasks",
     tags=["Admin diagnostics"],
-    dependencies=[Depends(require_tpl_admin)],
+    dependencies=[Depends(require_knowmart_admin)],
 )
 
 

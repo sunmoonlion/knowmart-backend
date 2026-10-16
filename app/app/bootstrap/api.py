@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 try:
-    _PACKAGE_VERSION = version("tpl-backend")
+    _PACKAGE_VERSION = version("knowmart-backend")
 except PackageNotFoundError:
     _PACKAGE_VERSION = "0+unknown"
 
@@ -66,7 +66,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             await get_postgres().shutdown()
 
     application = FastAPI(
-        title="tpl Backend",
+        title="knowmart Backend",
         description="One FastAPI Backend for separate Admin and Web browser surfaces",
         version=_PACKAGE_VERSION,
         lifespan=lifespan,

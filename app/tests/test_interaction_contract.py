@@ -29,15 +29,15 @@ def principal() -> Principal:
         actor_type="user",
         subject="web-user",
         issuer="https://identity.example.test",
-        app="tpl",
+        app="knowmart",
         surface="web",
-        audience="tpl-web-client",
+        audience="knowmart-web-client",
         actor_id=uuid.UUID("00000000-0000-4000-8000-000000000001"),
         roles=("member",),
         scopes=frozenset({"profile:read"}),
         authenticated_at=now,
         expires_at=now + timedelta(minutes=10),
-        policy_version="tpl-web-v2",
+        policy_version="knowmart-web-v2",
     )
 
 

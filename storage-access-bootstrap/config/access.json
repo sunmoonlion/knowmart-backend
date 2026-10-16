@@ -2,23 +2,23 @@
   "apiVersion": "storage.sunmoonai.com/v1alpha1",
   "kind": "ObjectStorageAccess",
   "metadata": {
-    "name": "tpl-backend"
+    "name": "knowmart-backend"
   },
   "spec": {
     "provider": "platform-s3",
     "environment": "development",
-    "app": "tpl-app",
-    "backend": "tpl-backend",
+    "app": "knowmart-app",
+    "backend": "knowmart-backend",
     "namespace": "app-platform-dev",
-    "secretName": "tpl-backend-s3",
-    "configMapName": "tpl-backend-s3",
+    "secretName": "knowmart-backend-s3",
+    "configMapName": "knowmart-backend-s3",
     "region": "us-east-1",
     "forcePathStyle": true,
     "useTLS": false,
     "deletionPolicy": "Retain",
     "buckets": [
       {
-        "name": "development-tpl-backend-assets",
+        "name": "development-knowmart-backend-assets",
         "permissions": ["read", "write", "delete", "list"],
         "versioning": true,
         "objectLock": false

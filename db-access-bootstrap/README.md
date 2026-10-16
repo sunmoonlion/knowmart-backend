@@ -1,6 +1,6 @@
 # db-access-bootstrap（统一 Backend）
 
-用于为 `tpl-backend` 声明并生成 PostgreSQL、MongoDB 与 Redis 的接入配置。统一 Backend 的 Web、Admin 与 Internal application layer 共享同一数据库所有权边界；运行角色按最小权限分别取得连接信息。
+用于为 `knowmart-backend` 声明并生成 PostgreSQL、MongoDB 与 Redis 的接入配置。统一 Backend 的 Web、Admin 与 Internal application layer 共享同一数据库所有权边界；运行角色按最小权限分别取得连接信息。
 
 配置位于 `config/`：
 
@@ -11,7 +11,7 @@
 脚本通过同级 `db-provisioner/bin/dbctl` 完成声明式配置。输出中的密码或完整连接串不得提交到 Git。
 
 ```bash
-cd tpl-backend/db-access-bootstrap
+cd knowmart-backend/db-access-bootstrap
 ./postgresql-access-bootstrap.sh --cluster KIND
 ./mongodb-access-bootstrap.sh --cluster KIND
 ./redis-access-bootstrap.sh --cluster KIND

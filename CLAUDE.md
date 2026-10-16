@@ -1,8 +1,8 @@
-# tpl-backend — 局部编码规则
+# knowmart-backend — 局部编码规则
 
 > 进入本目录时自动叠加。**本文件只约束局部编码。**
 > 项目全貌见 `../../k8s/docs/project-guide/overall-architecture.md`；
-> 本仓细节见 `../../k8s/docs/project-guide/repos/tpl-app.md`。
+> 本仓细节见 `../../k8s/docs/project-guide/repos/knowmart-app.md`。
 > **改代码前先读 `../../k8s/docs/dev-investment-agent/tree-build/rules/constraints.md`**（39 条，按主题分组）。
 > 与代码冲突时以代码为准。
 

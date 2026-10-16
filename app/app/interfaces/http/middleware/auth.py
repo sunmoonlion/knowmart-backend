@@ -95,7 +95,7 @@ def require_admin_scopes(*required: str) -> Callable[..., Awaitable[Principal]]:
     return dependency
 
 
-require_tpl_admin = require_admin_scopes(*_admin_profile.required_scopes)
+require_knowmart_admin = require_admin_scopes(*_admin_profile.required_scopes)
 
 
 async def get_internal_service_principal(

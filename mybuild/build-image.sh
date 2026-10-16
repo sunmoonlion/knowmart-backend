@@ -27,7 +27,7 @@ source "$SCRIPT_DIR/harbor-cluster.sh"
 REGISTRY="$(resolve_k8s_images_registry)" || exit 1
 export REGISTRY
 
-BACKEND_IMAGE="${BACKEND_IMAGE:-tpl-backend}"
+BACKEND_IMAGE="${BACKEND_IMAGE:-knowmart-backend}"
 BACKEND_TAG="${BACKEND_TAG:-architecture-v2-dev}"
 BACKEND_IMAGE_REGISTRY="${BACKEND_IMAGE_REGISTRY:-harbor.sunmoonai.com}"
 BACKEND_IMAGE_PROJECT="${BACKEND_IMAGE_PROJECT:-app-images}"

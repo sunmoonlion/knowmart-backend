@@ -2,16 +2,16 @@
   "apiVersion": "search.sunmoonai.com/v1alpha1",
   "kind": "ElasticsearchAccess",
   "metadata": {
-    "name": "tpl-backend"
+    "name": "knowmart-backend"
   },
   "spec": {
     "provider": "platform-elasticsearch",
     "environment": "development",
-    "app": "tpl-app",
-    "backend": "tpl-backend",
+    "app": "knowmart-app",
+    "backend": "knowmart-backend",
     "namespace": "app-platform-dev",
-    "secretName": "tpl-backend-elasticsearch",
-    "configMapName": "tpl-backend-elasticsearch",
+    "secretName": "knowmart-backend-elasticsearch",
+    "configMapName": "knowmart-backend-elasticsearch",
     "datasets": [
       {
         "name": "backend-documents",

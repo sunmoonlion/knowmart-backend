@@ -184,7 +184,7 @@ def signed_in(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake)
     app.dependency_overrides[cross_app_settings] = lambda: Settings(
         _env_file=None,
-        app_slug="tpl",
+        app_slug="knowmart",
         cross_app_sources_json=SOURCES,
         cross_app_targets_json=TARGETS,
     )
@@ -199,7 +199,7 @@ def client(*, cookie: bool = True) -> httpx.AsyncClient:
         transport=httpx.ASGITransport(app=app), base_url="http://testserver"
     )
     if cookie:
-        http.cookies.set("sunmoonai_tpl_web_sid", "member")
+        http.cookies.set("sunmoonai_knowmart_web_sid", "member")
     return http
 
 
@@ -209,7 +209,7 @@ async def test_where_this_application_takes_people(signed_in):
         got = await http.get("/api/web/v1/cross-app/links")
     assert got.status_code == 200
     assert got.json() == {
-        "app": "tpl",
+        "app": "knowmart",
         "targets": {
             "knowfeed": {"web_base_url": "https://knowfeed.example.test"},
             "knowbase": {"web_base_url": "https://knowbase.example.test"},

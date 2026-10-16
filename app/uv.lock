@@ -1069,7 +1069,7 @@ wheels = [
 ]
 
 [[package]]
-name = "tpl-backend"
+name = "knowmart-backend"
 version = "2.0.0"
 source = { virtual = "." }
 dependencies = [
