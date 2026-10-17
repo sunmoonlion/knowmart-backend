@@ -17,7 +17,7 @@ python -m app.cli.delivery_metrics --format prometheus
 `delivery_observers.py` 是显式领域扩展点：默认包装现有 DurableTasks 的 handler 清单；
 领域应装配实际 Delivery 实例，不能复制 topic/consumer/lease 的影子配置。
 模板没有领域 topic 是正常空清单；未注册消息单独报聚合数量，不将 DB topic 自动注册。
-Investment 加入实际 AgentDelivery：使用 agent.executor 回执和 Agent 租约，notification
+Knowbench 加入实际 AgentDelivery：使用 agent.executor 回执和 Agent 租约，notification
 没有业务 Inbox，发布成功即满足传输完成；绝不把 notification 当必需 Agent 回执。
 
 | gauge 字段 | 含义 |

@@ -30,13 +30,13 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_auth)
     app.dependency_overrides[knowbot_routes.service] = lambda: svc
     app.dependency_overrides[require_deliver_service] = lambda: _caller("knowlab")
-    app.dependency_overrides[require_summon_service] = lambda: _caller("investment")
+    app.dependency_overrides[require_summon_service] = lambda: _caller("knowbench")
     app.dependency_overrides[knowbot_routes.knowbot_settings] = lambda: (
         settings.model_copy(
             update={
                 "cross_app_sources_json": (
-                    '{"investment": {"return_url": '
-                    '"https://investment.example.test/zh-CN/workbench?ref={ref}"}}'
+                    '{"knowbench": {"return_url": '
+                    '"https://knowbench.example.test/zh-CN/workbench?ref={ref}"}}'
                 )
             }
         )
@@ -141,7 +141,7 @@ async def test_my_knowbots_lists_only_the_session_owner(wired) -> None:
         assert [k["name"] for k in listed] == ["财务分析与预测"]
         assert "manifest" not in listed[0]
         assert listed[0]["versions"][0]["status"] == "active"
-        assert listed[0]["versions"][0]["runtime"] == "investment"
+        assert listed[0]["versions"][0]["runtime"] == "knowbench"
 
 
 @pytest.mark.asyncio
@@ -165,11 +165,11 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
         url = f"/api/web/v1/knowbots/{knowbot}/versions/1/summon-return"
         headers = {"Origin": ORIGIN, "X-CSRF-Token": CSRF}
         ok = await c.post(
-            url, json={"from": "investment", "ref": "task-42"}, headers=headers
+            url, json={"from": "knowbench", "ref": "task-42"}, headers=headers
         )
         assert ok.status_code == 200
         target = urlsplit(ok.json()["return_url"])
-        assert target.netloc == "investment.example.test"
+        assert target.netloc == "knowbench.example.test"
         assert target.path == "/zh-CN/workbench"
         assert parse_qs(target.query) == {
             "ref": ["task-42"],
@@ -177,7 +177,7 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
         }
         unknown = await c.post(url, json={"from": "evil", "ref": "x"}, headers=headers)
         assert unknown.status_code == 400
-        assert (await c.post(url, json={"from": "investment"})).status_code == 403
+        assert (await c.post(url, json={"from": "knowbench"})).status_code == 403
         other = f"/api/web/v1/knowbots/{knowbot}/versions/9/summon-return"
-        missing = await c.post(other, json={"from": "investment"}, headers=headers)
+        missing = await c.post(other, json={"from": "knowbench"}, headers=headers)
         assert missing.status_code == 404

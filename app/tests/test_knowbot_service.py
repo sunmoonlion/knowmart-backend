@@ -104,7 +104,7 @@ async def test_summon_returns_only_the_owners_active_version() -> None:
     result = await deliver(svc, "delivery-0001", manifest())
     bot_id = str(result.knowbot_id)
     found = await svc.summon(
-        owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="investment"
+        owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
     )
     assert found.version.digest == result.digest
     assert found.version.manifest["pack"]["pack_id"] == "fin-forecast"
@@ -121,7 +121,7 @@ async def test_summon_returns_only_the_owners_active_version() -> None:
                 owner_subject=owner,
                 knowbot_id=knowbot,
                 version=version,
-                runtime="investment",
+                runtime="knowbench",
             )
 
 
@@ -135,7 +135,7 @@ async def test_stopped_version_cannot_be_summoned_and_others_cannot_stop() -> No
     await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1")
     with pytest.raises(NotFoundError):
         await svc.summon(
-            owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="investment"
+            owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
         )
     [bot] = await svc.list_for_owner(OWNER)
     assert bot.versions[0].status == "stopped"

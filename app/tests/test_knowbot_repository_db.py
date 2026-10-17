@@ -83,7 +83,7 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
             owner_subject=OWNER,
             knowbot_id=str(first.knowbot_id),
             version="1",
-            runtime="investment",
+            runtime="knowbench",
         )
         assert found.version.digest == first.digest
         assert found.version.manifest == manifest()  # 规范化后与交付的一致
@@ -98,7 +98,7 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
                 owner_subject=OWNER,
                 knowbot_id=str(first.knowbot_id),
                 version="1",
-                runtime="investment",
+                runtime="knowbench",
             )
 
 

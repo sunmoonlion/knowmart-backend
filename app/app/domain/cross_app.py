@@ -111,7 +111,7 @@ def parse_sources(
 ) -> dict[str, Source]:
     """哪些应用可以把用户带到这里，各自的回跳地址。
 
-    例：{"investment": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
+    例：{"knowbench": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
          "knowbase": {}}
     """
     sources: dict[str, Source] = {}

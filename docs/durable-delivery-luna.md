@@ -10,7 +10,7 @@
 | D1/D2/D6/D7 | 每 App 独立数据库、单线迁移；沿用 outbox_message/inbox_message，不新建业务主档；更新迁移门禁 |
 | D8 | 独立 Migration Job；运行角色不自动迁移 |
 | I1/C3/C4 | Admin/Web/Internal 共用应用用例；不改跨 App provider schema；运行现有双端契约测试 |
-| R6 | 公共实现先进模板；通过后串行接入 Info、Knowledge、Investment；领域 handler 为显式扩展点 |
+| R6 | 公共实现先进模板；通过后串行接入 Info、Knowledge、Knowbench；领域 handler 为显式扩展点 |
 | T4/T5 | 子仓提交先推送可达分支，再更新父仓 gitlink；交付列出各仓提交 |
 
 本任务交付源码基线与验证，不代表生产镜像已发布或业务数据库已迁移。既有正式发布清单仍描述其历史镜像；新的源码锁须与父仓 gitlink 一致，不把新源码冒充旧镜像。

@@ -48,7 +48,7 @@ class KnowbotManifestV1(Strict):
     name: str = Field(min_length=1, max_length=80)
     tagline: str = Field(default="", max_length=200)
     version: str = Field(pattern=r"^[1-9][0-9]{0,5}$")
-    # 运行方：这个分身在哪个应用里运行（现在只有 investment）。
+    # 运行方：这个分身在哪个应用里运行（现在只有 knowbench）。
     # 取清单只给运行方是调用方自己的
     runtime: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     pack: dict[str, Any]

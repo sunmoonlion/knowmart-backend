@@ -21,10 +21,10 @@ from app.main import app
 from core.config import Settings
 from tests.test_auth_routes_security import FakeAuthService, session
 
-KNOWN = frozenset({"investment", "knowbase"})
+KNOWN = frozenset({"knowbench", "knowbase"})
 SOURCES = (
-    '{"investment": {"return_url": '
-    '"https://investment.example.test/zh-CN/workbench/back?ref={ref}"},'
+    '{"knowbench": {"return_url": '
+    '"https://knowbench.example.test/zh-CN/workbench/back?ref={ref}"},'
     ' "knowbase": {}}'
 )
 TARGETS = (
@@ -37,27 +37,27 @@ TARGETS = (
 @pytest.mark.parametrize(
     ("app_name", "ref", "expected"),
     [
-        ("investment", "task:42", Origin("investment", "task:42")),
+        ("knowbench", "task:42", Origin("knowbench", "task:42")),
         (
-            "investment",
+            "knowbench",
             "01a0ed51-828f-7b13",
-            Origin("investment", "01a0ed51-828f-7b13"),
+            Origin("knowbench", "01a0ed51-828f-7b13"),
         ),
         ("knowbase", None, Origin("knowbase", None)),
         # 引用不合规则：应用还认，引用当作没带
-        ("investment", "bad ref", Origin("investment", None)),
-        ("investment", "a/b", Origin("investment", None)),
-        ("investment", "x" * 129, Origin("investment", None)),
-        ("investment", "", Origin("investment", None)),
-        ("investment", 42, Origin("investment", None)),
-        ("investment", "https://evil.example.test", Origin("investment", None)),
+        ("knowbench", "bad ref", Origin("knowbench", None)),
+        ("knowbench", "a/b", Origin("knowbench", None)),
+        ("knowbench", "x" * 129, Origin("knowbench", None)),
+        ("knowbench", "", Origin("knowbench", None)),
+        ("knowbench", 42, Origin("knowbench", None)),
+        ("knowbench", "https://evil.example.test", Origin("knowbench", None)),
         # 不认识的应用：整个当作没带
         ("unknown", "x", None),
-        ("Investment", "x", None),
-        ("investment ", "x", None),
+        ("Knowbench", "x", None),
+        ("knowbench ", "x", None),
         ("", "x", None),
         (None, "x", None),
-        (["investment"], "x", None),
+        (["knowbench"], "x", None),
     ],
 )
 def test_what_a_link_brings_is_not_trusted(app_name, ref, expected):
@@ -86,27 +86,27 @@ def test_a_reference_is_opaque_and_short():
 # ---------------- 回到原处 ----------------
 def test_the_way_back_comes_from_configuration_only():
     sources = parse_sources(SOURCES)
-    back = return_url(sources["investment"], Origin("investment", "task:42"))
-    assert back == "https://investment.example.test/zh-CN/workbench/back?ref=task%3A42"
+    back = return_url(sources["knowbench"], Origin("knowbench", "task:42"))
+    assert back == "https://knowbench.example.test/zh-CN/workbench/back?ref=task%3A42"
     # 没带引用：回跳地址照给，引用的位置是空的
     assert (
-        return_url(sources["investment"], Origin("investment"))
-        == "https://investment.example.test/zh-CN/workbench/back?ref="
+        return_url(sources["knowbench"], Origin("knowbench"))
+        == "https://knowbench.example.test/zh-CN/workbench/back?ref="
     )
     # 没登记回跳地址的应用：没有「回到原处」
     assert return_url(sources["knowbase"], Origin("knowbase", "x")) is None
-    assert return_url(None, Origin("investment", "x")) is None
-    assert return_url(sources["investment"], None) is None
+    assert return_url(None, Origin("knowbench", "x")) is None
+    assert return_url(sources["knowbench"], None) is None
     # 张冠李戴：不给
-    assert return_url(sources["investment"], Origin("knowbase", "x")) is None
+    assert return_url(sources["knowbench"], Origin("knowbase", "x")) is None
 
 
 # ---------------- 配置 ----------------
 def test_the_two_settings():
     assert parse_sources(SOURCES) == {
-        "investment": Source(
-            "investment",
-            "https://investment.example.test/zh-CN/workbench/back?ref={ref}",
+        "knowbench": Source(
+            "knowbench",
+            "https://knowbench.example.test/zh-CN/workbench/back?ref={ref}",
         ),
         "knowbase": Source("knowbase"),
     }
@@ -122,7 +122,7 @@ def test_the_two_settings():
         cross_app_sources_json=SOURCES,
         cross_app_targets_json=TARGETS,
     )
-    assert set(set_up.cross_app_sources()) == {"investment", "knowbase"}
+    assert set(set_up.cross_app_sources()) == {"knowbench", "knowbase"}
     assert (
         set_up.cross_app_targets()["knowfeed"].web_base_url
         == "https://knowfeed.example.test"
@@ -134,21 +134,21 @@ def test_the_two_settings():
     [
         "not json",
         "[]",
-        '{"Investment": {}}',
+        '{"Knowbench": {}}',
         '{"in vestment": {}}',
-        '{"investment": []}',
-        '{"investment": {"return_to": "https://a.example.test"}}',
-        '{"investment": {"return_url": 1}}',
-        '{"investment": {"return_url": "/relative?ref={ref}"}}',
-        '{"investment": {"return_url": "javascript:alert(1)"}}',
-        '{"investment": {"return_url": "ftp://a.example.test/{ref}"}}',
-        '{"investment": {"return_url": "https://u:p@a.example.test/?ref={ref}"}}',
-        '{"investment": {"return_url": "https://a.example.test/{ref}/{ref}"}}',
-        '{"investment": {"return_url": "https://a.example.test/{other}"}}',
-        '{"investment": {"return_url": "https://{ref}.example.test/"}}',
-        '{"investment": {"return_url": "https://a.example.test/ x?ref={ref}"}}',
-        '{"investment": {"return_url": "https://a.example.test/#ref={ref}"}}',
-        '{"investment": {"return_url": "https://a.example.test:port/?ref={ref}"}}',
+        '{"knowbench": []}',
+        '{"knowbench": {"return_to": "https://a.example.test"}}',
+        '{"knowbench": {"return_url": 1}}',
+        '{"knowbench": {"return_url": "/relative?ref={ref}"}}',
+        '{"knowbench": {"return_url": "javascript:alert(1)"}}',
+        '{"knowbench": {"return_url": "ftp://a.example.test/{ref}"}}',
+        '{"knowbench": {"return_url": "https://u:p@a.example.test/?ref={ref}"}}',
+        '{"knowbench": {"return_url": "https://a.example.test/{ref}/{ref}"}}',
+        '{"knowbench": {"return_url": "https://a.example.test/{other}"}}',
+        '{"knowbench": {"return_url": "https://{ref}.example.test/"}}',
+        '{"knowbench": {"return_url": "https://a.example.test/ x?ref={ref}"}}',
+        '{"knowbench": {"return_url": "https://a.example.test/#ref={ref}"}}',
+        '{"knowbench": {"return_url": "https://a.example.test:port/?ref={ref}"}}',
     ],
 )
 def test_a_wrong_list_of_sources_stops_the_start(bad):
@@ -223,12 +223,12 @@ async def test_where_this_application_takes_people(signed_in):
     ("params", "expected"),
     [
         (
-            {"from": "investment", "ref": "task:42"},
+            {"from": "knowbench", "ref": "task:42"},
             {
-                "app": "investment",
+                "app": "knowbench",
                 "ref": "task:42",
                 "return_url": (
-                    "https://investment.example.test/zh-CN/workbench/back?ref=task%3A42"
+                    "https://knowbench.example.test/zh-CN/workbench/back?ref=task%3A42"
                 ),
             },
         ),
@@ -237,11 +237,11 @@ async def test_where_this_application_takes_people(signed_in):
             {"app": "knowbase", "ref": "x", "return_url": None},
         ),
         (
-            {"from": "investment", "ref": "bad ref"},
+            {"from": "knowbench", "ref": "bad ref"},
             {
-                "app": "investment",
+                "app": "knowbench",
                 "ref": None,
-                "return_url": "https://investment.example.test/zh-CN/workbench/back?ref=",
+                "return_url": "https://knowbench.example.test/zh-CN/workbench/back?ref=",
             },
         ),
         ({"from": "unknown", "ref": "x"}, None),
@@ -262,7 +262,7 @@ async def test_an_address_in_the_link_is_never_used(signed_in):
         got = await http.get(
             "/api/web/v1/cross-app/origin",
             params={
-                "from": "investment",
+                "from": "knowbench",
                 "ref": "t1",
                 "return_to": "https://evil.example.test/",
                 "return_url": "https://evil.example.test/",
@@ -274,7 +274,7 @@ async def test_an_address_in_the_link_is_never_used(signed_in):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("path", ["links", "origin?from=investment"])
+@pytest.mark.parametrize("path", ["links", "origin?from=knowbench"])
 async def test_only_people_who_signed_in(signed_in, path):
     async with client(cookie=False) as http:
         got = await http.get(f"/api/web/v1/cross-app/{path}")

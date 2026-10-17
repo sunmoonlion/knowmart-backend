@@ -16,23 +16,23 @@ from app.infrastructure.security.relation_auth import (
 from app.main import settings
 
 ENV = {
-    "SERVICE_AUTH_SUMMON_CALLERS": "investment",
-    "SERVICE_AUTH_SUMMON_INVESTMENT_AUDIENCE": "sunmoon-investment-knowmart-summon",
-    "SERVICE_AUTH_SUMMON_INVESTMENT_SUBJECT_ALLOWLIST": (
-        "admin/sunmoonai-investment-knowmart-summon"
+    "SERVICE_AUTH_SUMMON_CALLERS": "knowbench",
+    "SERVICE_AUTH_SUMMON_KNOWBENCH_AUDIENCE": "sunmoon-knowbench-knowmart-summon",
+    "SERVICE_AUTH_SUMMON_KNOWBENCH_SUBJECT_ALLOWLIST": (
+        "admin/sunmoonai-knowbench-knowmart-summon"
     ),
-    "SERVICE_AUTH_SUMMON_INVESTMENT_REQUIRED_SCOPE": "knowmart:summon",
+    "SERVICE_AUTH_SUMMON_KNOWBENCH_REQUIRED_SCOPE": "knowmart:summon",
 }
 
 
 class FakeOidc:
     def __init__(
-        self, aud: str = "sunmoon-investment-knowmart-summon", **claims: object
+        self, aud: str = "sunmoon-knowbench-knowmart-summon", **claims: object
     ) -> None:
         now = int(time.time())
         self.claims = {
             "iss": "https://identity.example.test",
-            "sub": "admin/sunmoonai-investment-knowmart-summon",
+            "sub": "admin/sunmoonai-knowbench-knowmart-summon",
             "scope": "knowmart:summon",
             "iat": now,
             "exp": now + 900,
@@ -57,13 +57,13 @@ def verifier(oidc: FakeOidc, env: dict | None = None) -> RelationServiceVerifier
 
 
 def test_bindings_need_all_three_and_the_matching_scope() -> None:
-    assert [b.caller for b in relation_bindings("summon", ENV)] == ["investment"]
+    assert [b.caller for b in relation_bindings("summon", ENV)] == ["knowbench"]
     assert relation_bindings("deliver", ENV) == []
     bad_scope = ENV | {
-        "SERVICE_AUTH_SUMMON_INVESTMENT_REQUIRED_SCOPE": "knowmart:deliver"
+        "SERVICE_AUTH_SUMMON_KNOWBENCH_REQUIRED_SCOPE": "knowmart:deliver"
     }
     assert relation_bindings("summon", bad_scope) == []
-    no_subject = ENV | {"SERVICE_AUTH_SUMMON_INVESTMENT_SUBJECT_ALLOWLIST": " "}
+    no_subject = ENV | {"SERVICE_AUTH_SUMMON_KNOWBENCH_SUBJECT_ALLOWLIST": " "}
     assert relation_bindings("summon", no_subject) == []
     assert relation_bindings("summon", ENV | {"SERVICE_AUTH_SUMMON_CALLERS": ""}) == []
 
@@ -72,8 +72,8 @@ def test_bindings_need_all_three_and_the_matching_scope() -> None:
 async def test_bound_subject_with_scope_is_accepted_with_the_callers_audience() -> None:
     oidc = FakeOidc()
     caller = await verifier(oidc).verify("token")
-    assert caller.caller == "investment"
-    assert oidc.tried == ["sunmoon-investment-knowmart-summon"]
+    assert caller.caller == "knowbench"
+    assert oidc.tried == ["sunmoon-knowbench-knowmart-summon"]
     assert caller.principal.actor_type == "service"
     assert caller.principal.scopes == frozenset({"knowmart:summon"})
 
@@ -109,7 +109,7 @@ async def test_empty_or_oversized_tokens_are_rejected() -> None:
 
 
 TWO_CALLERS = ENV | {
-    "SERVICE_AUTH_SUMMON_CALLERS": "investment,other-runtime",
+    "SERVICE_AUTH_SUMMON_CALLERS": "knowbench,other-runtime",
     "SERVICE_AUTH_SUMMON_OTHER_RUNTIME_AUDIENCE": (
         "sunmoon-other-runtime-knowmart-summon"
     ),
@@ -132,7 +132,7 @@ async def test_the_caller_is_recognised_among_several() -> None:
 
 @pytest.mark.asyncio
 async def test_a_caller_cannot_use_another_callers_subject() -> None:
-    # investment 的受众配上另一个运行方的主体：主体不在 investment 的名单里
+    # knowbench 的受众配上另一个运行方的主体：主体不在 knowbench 的名单里
     oidc = FakeOidc(sub="admin/sunmoonai-other-runtime-knowmart-summon")
     with pytest.raises(ForbiddenError):
         await verifier(oidc, env=TWO_CALLERS).verify("token")

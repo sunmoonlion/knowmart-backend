@@ -49,7 +49,7 @@ class Settings(BaseSettings):
 
     # 跨应用跳转（app/domain/cross_app.py）。都可不配：不配就是不带人来、也不带人去。
     # 哪些应用可以把用户带到这里，各自的回跳地址。回跳地址只从这里取，从不从链接里取。
-    #   {"investment": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
+    #   {"knowbench": {"return_url": "https://…/zh-CN/workbench?ref={ref}"},
     #    "knowbase": {}}
     cross_app_sources_json: str = "{}"
     # 这个应用会把用户带去哪些应用，各自网页端的地址。
