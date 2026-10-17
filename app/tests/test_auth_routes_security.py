@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -115,6 +116,52 @@ async def test_admin_and_web_me_use_distinct_cookies_and_minimal_claims(
         assert "audience" not in rendered
         assert "access_token" not in rendered
         assert "id_token" not in rendered
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("roles", "scopes", "allowlist", "allowed"),
+    [
+        (("admin",), (), {"admin", "operator"}, True),
+        (("operator",), (), {"admin", "operator"}, True),
+        (("editor",), (), {"admin", "operator"}, False),
+        ((), ("knowmart:admin",), {"admin", "operator"}, True),
+        (("admin",), (), set(), False),
+    ],
+)
+async def test_admin_business_routes_accept_the_admin_roles(
+    monkeypatch: pytest.MonkeyPatch,
+    roles: tuple[str, ...],
+    scopes: tuple[str, ...],
+    allowlist: set[str],
+    allowed: bool,
+) -> None:
+    """只给角色、不发「应用名:admin」：白名单里的管理角色能用管理接口（账 134）。"""
+    base = session("admin", *scopes)
+    principal = base.principal.model_copy(update={"roles": roles})
+    fake = FakeAuthService({"s": base.model_copy(update={"principal": principal})})
+    monkeypatch.setattr(auth_middleware, "admin_auth_service", fake)
+    monkeypatch.setattr(
+        auth_middleware,
+        "_admin_profile",
+        dataclasses.replace(
+            auth_middleware._admin_profile, role_allowlist=frozenset(allowlist)
+        ),
+    )
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        client.cookies.set("sunmoonai_knowmart_admin_sid", "s")
+        response = await client.post(
+            "/api/admin/v1/diagnostics/tasks/ping",
+            headers={
+                "Origin": settings.browser_profile("admin").frontend_origins[0],
+                "X-CSRF-Token": base.csrf_token,
+            },
+        )
+    # 过了身份这一关就轮到任务队列（测试里没配，503）；没过是 403
+    assert response.status_code == (503 if allowed else 403), response.text
 
 
 def test_admin_has_no_signup_and_web_has_signup_and_continue() -> None:

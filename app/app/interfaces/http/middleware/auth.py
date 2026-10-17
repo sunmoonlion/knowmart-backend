@@ -89,8 +89,13 @@ def require_admin_scopes(*required: str) -> Callable[..., Awaitable[Principal]]:
     async def dependency(
         session: Annotated[BrowserSession, Depends(get_admin_browser_session)],
     ) -> Principal:
-        admin_auth_service.require_scopes(session.principal, required_set)
-        return session.principal
+        principal = session.principal
+        # 白名单里的管理角色（admin、operator，待办 98）也算管理员：
+        # 部署只给角色，不发「应用名:admin」这个权限；只认权限的话，
+        # 管理端业务接口对谁都是 403（2026-10-17 knowlab 走查，账 134）
+        if not set(principal.roles) & _admin_profile.role_allowlist:
+            admin_auth_service.require_scopes(principal, required_set)
+        return principal
 
     return dependency
 
