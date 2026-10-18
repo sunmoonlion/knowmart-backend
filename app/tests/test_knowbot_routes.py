@@ -49,10 +49,9 @@ def _caller(name: str) -> ServiceCaller:
     return ServiceCaller(caller=name, principal=None)  # type: ignore[arg-type]
 
 
-def client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
-    )
+def client(base_url: str = "http://127.0.0.1") -> httpx.AsyncClient:
+    # 内部接口只认集群内与回环地址（审读第 1 条）
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url=base_url)
 
 
 async def _deliver(c: httpx.AsyncClient, delivery: str, owner: str = OWNER, **kw):
@@ -128,6 +127,10 @@ async def test_internal_routes_require_their_own_relation() -> None:
         assert no_token.status_code == 401
         no_token = await c.get("/api/internal/v1/knowmart/owners/u/knowbots/x@1")
         assert no_token.status_code == 401
+    # 公网地址来的：当没有这个接口，连令牌都不看
+    async with client("http://testserver") as c:
+        hidden = await c.get("/api/internal/v1/knowmart/owners/u/knowbots/x@1")
+        assert hidden.status_code == 404
 
 
 @pytest.mark.asyncio

@@ -37,7 +37,7 @@ class KnowbotRecord:
     current_version: str | None
     versions: tuple[KnowbotVersionRecord, ...] = ()
     # 专家目录（SDD 0032）
-    category: str = "finance.securities_advisory"
+    category: str = "uncategorized"
     visibility: Visibility = "private"
     publisher_id: uuid.UUID | None = None
 

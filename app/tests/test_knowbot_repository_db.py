@@ -163,10 +163,20 @@ async def test_catalog_visibility_in_sql(db) -> None:
             ),
             {"i": publisher},
         )
+        # 未分类的不能公开（审读第 6 条，数据库约束兜底）
+        with pytest.raises(DBAPIError):
+            async with session.begin_nested():
+                await session.execute(
+                    text(
+                        "update knowbot set visibility = 'public', publisher_id = :p "
+                        "where id = :i"
+                    ),
+                    {"p": publisher, "i": theirs.knowbot_id},
+                )
         await session.execute(
             text(
-                "update knowbot set visibility = 'public', publisher_id = :p "
-                "where id = :i"
+                "update knowbot set visibility = 'public', publisher_id = :p, "
+                "category = 'finance.securities_advisory' where id = :i"
             ),
             {"p": publisher, "i": theirs.knowbot_id},
         )
@@ -187,7 +197,7 @@ async def test_catalog_visibility_in_sql(db) -> None:
         )
         assert [b.id for b in closed] == [mine.knowbot_id]
         assert closed[0].visibility == "private"
-        assert closed[0].category == "finance.securities_advisory"
+        assert closed[0].category == "uncategorized"  # 没选类目
         opened = await repo.list_visible(
             OWNER, public_market=True, today=date(2026, 10, 18)
         )
@@ -207,3 +217,37 @@ async def test_catalog_visibility_in_sql(db) -> None:
             )
             is None
         )
+
+
+def _step(name: str, direction: str):
+    """只跑一条迁移的 upgrade 或 downgrade。"""
+
+    def run(connection) -> None:
+        path = ROOT / "alembic/versions" / f"{name}.py"
+        spec = importlib.util.spec_from_file_location(path.stem, path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with Operations.context(MigrationContext.configure(connection)):
+            getattr(module, direction)()
+
+    return run
+
+
+@pytest.mark.asyncio
+async def test_experts_from_before_0006_become_uncategorized(db) -> None:
+    """0005 给已有的专家都写了投资咨询类，没人选过：0006 改成未分类（审读第 6 条）。"""
+    bot = await deliver(db, "delivery-0201", manifest(), ref="lab-old")
+    name = "20261018_0006_uncategorized"
+    async with db() as session, session.begin():
+        connection = await session.connection()
+        await connection.run_sync(_step(name, "downgrade"))
+        row = await session.execute(
+            text("select category from knowbot where id = :i"), {"i": bot.knowbot_id}
+        )
+        assert row.scalar_one() == "finance.securities_advisory"
+        await connection.run_sync(_step(name, "upgrade"))
+    async with db() as session:
+        row = await session.execute(
+            text("select category from knowbot where id = :i"), {"i": bot.knowbot_id}
+        )
+        assert row.scalar_one() == "uncategorized"

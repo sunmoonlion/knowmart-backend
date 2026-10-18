@@ -160,6 +160,7 @@ async def test_categories_count_only_what_the_user_sees_and_skip_empty_ones() ->
     a = await deliver(repo, ME, "a", name="甲")
     b = await deliver(repo, ME, "b", name="乙")
     await deliver(repo, OTHER, "c", name="别人的")
+    repo.bots[a]["category"] = "finance.securities_advisory"
     repo.bots[b]["category"] = "tools.calculator"
     svc = catalog(repo)
     tree = await svc.categories(ME)
@@ -191,6 +192,24 @@ async def test_categories_count_only_what_the_user_sees_and_skip_empty_ones() ->
         await svc.list(ME, CatalogQuery(category="finance.securities_advisory"))
     ) == ["甲"]
     assert a in repo.bots
+
+
+@pytest.mark.asyncio
+async def test_experts_without_a_chosen_category_are_uncategorized() -> None:
+    """没选类目不默认成「证券 / 期货投资咨询」（所有者 2026-10-18 采纳审读第 6 条）。"""
+    repo = MemoryKnowbots()
+    await deliver(repo, ME, "a", name="甲")
+    svc = catalog(repo)
+    assert await svc.categories(ME) == [
+        {
+            "group": "uncategorized",
+            "group_name": "未分类",
+            "count": 1,
+            "children": [{"code": "uncategorized", "name": "未分类", "count": 1}],
+        }
+    ]
+    [item] = (await svc.list(ME, CatalogQuery()))["items"]
+    assert item["category"]["name"] == "未分类"
 
 
 @pytest.mark.asyncio

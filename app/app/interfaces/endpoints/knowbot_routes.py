@@ -26,6 +26,7 @@ from app.infrastructure.security.relation_auth import (
     require_summon_service,
 )
 from app.infrastructure.storage.postgres import get_db_session
+from app.interfaces.http.internal.host_guard import internal_host_only
 from app.interfaces.http.middleware.auth import (
     get_web_browser_session,
     get_web_current_user,
@@ -36,7 +37,9 @@ CONTRACT_VERSION = 1
 NO_STORE = {"Cache-Control": "no-store"}
 
 internal_router = APIRouter(
-    prefix="/internal/v1/knowmart", tags=["Knowbots (internal)"]
+    prefix="/internal/v1/knowmart",
+    tags=["Knowbots (internal)"],
+    dependencies=[Depends(internal_host_only)],  # 公网地址来的当没有（审读第 1 条）
 )
 web_router = APIRouter(prefix="/web/v1/knowbots", tags=["Knowbots"])
 

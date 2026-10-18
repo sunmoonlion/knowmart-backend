@@ -59,7 +59,8 @@ async def test_catalog_lists_only_my_experts_with_categories(repo) -> None:
         assert body["total"] == 1 and body["page"] == 1
         assert body["categories"][0]["children"][0]["count"] == 1
         cats = await c.get("/api/web/v1/knowmart/categories")
-        assert cats.json()["categories"][0]["group"] == "finance"
+        # 没选类目的记未分类（审读第 6 条）
+        assert cats.json()["categories"][0]["group"] == "uncategorized"
         detail = await c.get(f"/api/web/v1/knowmart/experts/{mine}")
         assert detail.status_code == 200
         assert detail.json()["expert"]["owned"] is True

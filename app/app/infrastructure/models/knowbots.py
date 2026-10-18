@@ -37,7 +37,7 @@ class Knowbot(TimestampMixin, Base):
     current_version: Mapped[str | None] = mapped_column(String(16))
     # 专家目录（SDD 0032）：类目、可见范围（自用 / 公开）、发布主体（公开才有）
     category: Mapped[str] = mapped_column(
-        String(64), nullable=False, default="finance.securities_advisory"
+        String(64), nullable=False, default="uncategorized"
     )
     visibility: Mapped[str] = mapped_column(
         String(16), nullable=False, default="private"
@@ -55,6 +55,10 @@ class Knowbot(TimestampMixin, Base):
         CheckConstraint(
             "visibility = 'private' OR publisher_id IS NOT NULL",
             name="ck_knowbot_public_has_publisher",
+        ),
+        CheckConstraint(
+            "visibility = 'private' OR category <> 'uncategorized'",
+            name="ck_knowbot_public_has_category",
         ),
     )
 

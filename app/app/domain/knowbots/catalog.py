@@ -47,11 +47,13 @@ CATEGORIES: tuple[Category, ...] = (
     Category("tools.lookup", "tools", "工具", "信息查询"),
     Category("tools.calculator", "tools", "工具", "计算器"),
     Category("business.management", "business", "商业服务", "企业管理"),
+    # 没选类目的（所有者 2026-10-18 采纳审读第 6 条）：不能公开，排在最后
+    Category("uncategorized", "uncategorized", "未分类", "未分类"),
 )
 BY_CODE = {c.code: c for c in CATEGORIES}
 GROUPS = tuple(dict.fromkeys(c.group for c in CATEGORIES))
-# 现有的专家都是财务类；knowlab 出专家时选类目之前，一律记这一类
-DEFAULT_CATEGORY = "finance.securities_advisory"
+# knowlab 交付时由运营选类目（0032 待定第一项）；没选的记未分类，不默认成投资咨询
+DEFAULT_CATEGORY = "uncategorized"
 
 
 def category_view(code: str) -> dict[str, str]:

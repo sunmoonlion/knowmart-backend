@@ -166,7 +166,7 @@ class MemoryKnowbots:
                 and bool(
                     self._valid_licenses(
                         bot.get("publisher_id"),
-                        bot.get("category", "finance.securities_advisory"),
+                        bot.get("category", "uncategorized"),
                         today,
                     )
                 )
