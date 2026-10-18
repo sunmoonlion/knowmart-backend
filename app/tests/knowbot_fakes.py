@@ -6,13 +6,14 @@ import copy
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from app.application.ports.knowbots import (
     DeliveryRecord,
     KnowbotRecord,
     KnowbotVersionRecord,
+    PublisherRecord,
     VersionStatus,
 )
 
@@ -44,6 +45,9 @@ class MemoryKnowbots:
     def __init__(self) -> None:
         self.bots: dict[uuid.UUID, dict[str, Any]] = {}
         self.versions: dict[tuple[uuid.UUID, str], KnowbotVersionRecord] = {}
+        # 发布主体与资质（SDD 0032）：测试直接往里放
+        self.publishers: dict[uuid.UUID, dict[str, Any]] = {}
+        self.licenses: list[dict[str, Any]] = []
         self.commits = 0
         self.rollbacks = 0
 
@@ -137,6 +141,60 @@ class MemoryKnowbots:
             for b in self.bots.values()
             if b["owner_subject"] == owner_subject
         ]
+
+    def _valid_licenses(
+        self, publisher_id: uuid.UUID | None, category: str, today: date
+    ) -> list[dict[str, Any]]:
+        return [
+            lic
+            for lic in self.licenses
+            if lic["publisher_id"] == publisher_id
+            and lic["category"] == category
+            and lic["review_status"] == "approved"
+            and (lic.get("valid_until") is None or lic["valid_until"] >= today)
+        ]
+
+    async def list_visible(
+        self, owner_subject: str, *, public_market: bool, today: date
+    ) -> Sequence[KnowbotRecord]:
+        out = []
+        for bot in self.bots.values():
+            mine = bot["owner_subject"] == owner_subject
+            public = (
+                public_market
+                and bot.get("visibility") == "public"
+                and bool(
+                    self._valid_licenses(
+                        bot.get("publisher_id"),
+                        bot.get("category", "finance.securities_advisory"),
+                        today,
+                    )
+                )
+            )
+            if mine or public:
+                out.append(self._record(bot))
+        return out
+
+    async def licensed_publisher(
+        self, publisher_id: uuid.UUID, category: str, *, today: date
+    ) -> PublisherRecord | None:
+        publisher = self.publishers.get(publisher_id)
+        licenses = self._valid_licenses(publisher_id, category, today)
+        if publisher is None or not licenses:
+            return None
+        return PublisherRecord(
+            licenses=tuple(
+                {
+                    "name": lic["license_name"],
+                    "number": lic["license_no"],
+                    "valid_until": lic["valid_until"].isoformat()
+                    if lic.get("valid_until")
+                    else None,
+                }
+                for lic in licenses
+            ),
+            **publisher,
+        )
 
     async def set_version_status(
         self, knowbot_id: uuid.UUID, version: str, status: VersionStatus

@@ -8,9 +8,10 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,9 +19,15 @@ from app.application.ports.knowbots import (
     DeliveryRecord,
     KnowbotRecord,
     KnowbotVersionRecord,
+    PublisherRecord,
     VersionStatus,
 )
-from app.infrastructure.models.knowbots import Knowbot, KnowbotVersion
+from app.infrastructure.models.knowbots import (
+    Knowbot,
+    KnowbotVersion,
+    Publisher,
+    PublisherLicense,
+)
 
 
 def _version(row: KnowbotVersion) -> KnowbotVersionRecord:
@@ -45,6 +52,20 @@ def _knowbot(row: Knowbot, versions: Sequence[KnowbotVersion] = ()) -> KnowbotRe
         current_version=row.current_version,
         versions=tuple(
             _version(v) for v in sorted(versions, key=lambda v: int(v.version))
+        ),
+        category=row.category,
+        visibility=row.visibility,  # type: ignore[arg-type]
+        publisher_id=row.publisher_id,
+    )
+
+
+def _license_valid(today: date):
+    """审核通过、未过期的资质（valid_until 为空算长期有效）。"""
+    return and_(
+        PublisherLicense.review_status == "approved",
+        or_(
+            PublisherLicense.valid_until.is_(None),
+            PublisherLicense.valid_until >= today,
         ),
     )
 
@@ -159,17 +180,69 @@ class SqlKnowbotRepository:
         return _knowbot(bot, list(versions))
 
     async def list_for_owner(self, owner_subject: str) -> Sequence[KnowbotRecord]:
-        bots = (
+        return await self._with_versions(
+            select(Knowbot)
+            .where(Knowbot.owner_subject == owner_subject)
+            .order_by(Knowbot.created_at, Knowbot.id)
+        )
+
+    async def list_visible(
+        self, owner_subject: str, *, public_market: bool, today: date
+    ) -> Sequence[KnowbotRecord]:
+        visible = Knowbot.owner_subject == owner_subject
+        if public_market:
+            licensed = exists().where(
+                PublisherLicense.publisher_id == Knowbot.publisher_id,
+                PublisherLicense.category == Knowbot.category,
+                _license_valid(today),
+            )
+            visible = or_(visible, and_(Knowbot.visibility == "public", licensed))
+        return await self._with_versions(
+            select(Knowbot).where(visible).order_by(Knowbot.created_at, Knowbot.id)
+        )
+
+    async def licensed_publisher(
+        self, publisher_id: uuid.UUID, category: str, *, today: date
+    ) -> PublisherRecord | None:
+        publisher = await self.session.get(Publisher, publisher_id)
+        if publisher is None:
+            return None
+        licenses = (
             (
                 await self.session.execute(
-                    select(Knowbot)
-                    .where(Knowbot.owner_subject == owner_subject)
-                    .order_by(Knowbot.created_at, Knowbot.id)
+                    select(PublisherLicense)
+                    .where(
+                        PublisherLicense.publisher_id == publisher_id,
+                        PublisherLicense.category == category,
+                        _license_valid(today),
+                    )
+                    .order_by(PublisherLicense.created_at)
                 )
             )
             .scalars()
             .all()
         )
+        if not licenses:
+            return None
+        return PublisherRecord(
+            id=publisher.id,
+            kind=publisher.kind,  # type: ignore[arg-type]
+            name=publisher.name,
+            real_name_verified=publisher.real_name_verified,
+            licenses=tuple(
+                {
+                    "name": lic.license_name,
+                    "number": lic.license_no,
+                    "valid_until": lic.valid_until.isoformat()
+                    if lic.valid_until
+                    else None,
+                }
+                for lic in licenses
+            ),
+        )
+
+    async def _with_versions(self, query) -> Sequence[KnowbotRecord]:
+        bots = (await self.session.execute(query)).scalars().all()
         if not bots:
             return []
         versions = (

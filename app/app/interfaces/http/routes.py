@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.interfaces.endpoints.expert_routes import router as expert_router
 from app.interfaces.endpoints.knowbot_routes import (
     internal_router as knowbot_internal_router,
 )
@@ -22,3 +23,4 @@ router.include_router(web_interactions_router)
 router.include_router(web_cross_app_router)
 router.include_router(knowbot_internal_router)
 router.include_router(knowbot_web_router)
+router.include_router(expert_router)

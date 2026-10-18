@@ -132,3 +132,78 @@ async def test_concurrent_deliveries_of_one_knowbot_never_duplicate_it(db) -> No
             await session.execute(text("SELECT count(*) FROM knowbot_version"))
         ).scalar()
     assert count == 1 and versions == 2
+
+
+@pytest.mark.asyncio
+async def test_catalog_visibility_in_sql(db) -> None:
+    """专家目录（SDD 0032）：自己的都看得到；别人的公开专家要开关与该类目有效资质。"""
+    from datetime import date
+
+    mine = await deliver(db, "delivery-0101", manifest(), ref="lab-mine")
+    other = "9c2f0000-0000-4000-8000-000000000002"
+    async with db() as session:
+        theirs = await KnowbotService(SqlKnowbotRepository(session)).deliver(
+            delivery_id="delivery-0102",
+            owner_subject=other,
+            knowbot_ref="lab-theirs",
+            manifest=manifest(name="别人的公开专家"),
+        )
+        # 公开必须有发布主体（数据库约束兜底）
+        with pytest.raises(DBAPIError):
+            async with session.begin_nested():
+                await session.execute(
+                    text("update knowbot set visibility = 'public' where id = :i"),
+                    {"i": theirs.knowbot_id},
+                )
+        publisher = uuid.uuid4()
+        await session.execute(
+            text(
+                "insert into publisher (id, kind, name, real_name_verified) "
+                "values (:i, 'organization', '某某证券', true)"
+            ),
+            {"i": publisher},
+        )
+        await session.execute(
+            text(
+                "update knowbot set visibility = 'public', publisher_id = :p "
+                "where id = :i"
+            ),
+            {"p": publisher, "i": theirs.knowbot_id},
+        )
+        await session.execute(
+            text(
+                "insert into publisher_license (id, publisher_id, category, "
+                "license_name, license_no, valid_until, review_status) values "
+                "(:i, :p, 'finance.securities_advisory', '经营证券期货业务许可证', "
+                "'000000001', :until, 'approved')"
+            ),
+            {"i": uuid.uuid4(), "p": publisher, "until": date(2026, 12, 31)},
+        )
+        await session.commit()
+    async with db() as session:
+        repo = SqlKnowbotRepository(session)
+        closed = await repo.list_visible(
+            OWNER, public_market=False, today=date(2026, 10, 18)
+        )
+        assert [b.id for b in closed] == [mine.knowbot_id]
+        assert closed[0].visibility == "private"
+        assert closed[0].category == "finance.securities_advisory"
+        opened = await repo.list_visible(
+            OWNER, public_market=True, today=date(2026, 10, 18)
+        )
+        assert {b.id for b in opened} == {mine.knowbot_id, theirs.knowbot_id}
+        expired = await repo.list_visible(
+            OWNER, public_market=True, today=date(2027, 1, 1)
+        )
+        assert [b.id for b in expired] == [mine.knowbot_id]
+        found = await repo.licensed_publisher(
+            publisher, "finance.securities_advisory", today=date(2026, 10, 18)
+        )
+        assert found is not None and found.name == "某某证券"
+        assert found.licenses[0]["valid_until"] == "2026-12-31"
+        assert (
+            await repo.licensed_publisher(
+                publisher, "finance.public_fund", today=date(2026, 10, 18)
+            )
+            is None
+        )

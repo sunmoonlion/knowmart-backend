@@ -9,10 +9,11 @@ import uuid
 from collections.abc import Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, Protocol
 
 VersionStatus = Literal["active", "stopped"]
+Visibility = Literal["private", "public"]
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,20 @@ class KnowbotRecord:
     tagline: str
     current_version: str | None
     versions: tuple[KnowbotVersionRecord, ...] = ()
+    # 专家目录（SDD 0032）
+    category: str = "finance.securities_advisory"
+    visibility: Visibility = "private"
+    publisher_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True)
+class PublisherRecord:
+    id: uuid.UUID
+    kind: Literal["individual", "organization"]
+    name: str
+    real_name_verified: bool
+    # 这个类目上审核通过、未过期的资质（名称与编号）
+    licenses: tuple[dict[str, str | None], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -84,3 +99,17 @@ class KnowbotRepository(Protocol):
     async def set_version_status(
         self, knowbot_id: uuid.UUID, version: str, status: VersionStatus
     ) -> None: ...
+
+    async def list_visible(
+        self, owner_subject: str, *, public_market: bool, today: date
+    ) -> Sequence[KnowbotRecord]:
+        """这个用户看得到的专家（SDD 0032），带版本：自己的，加上平台开了公开、
+        可见范围是公开、发布主体在这个类目上有审核通过且 today 未过期的资质的。"""
+        ...
+
+    async def licensed_publisher(
+        self, publisher_id: uuid.UUID, category: str, *, today: date
+    ) -> PublisherRecord | None:
+        """发布主体在这个类目上有审核通过、未过期的资质时返回它（带这些资质），
+        否则 None。"""
+        ...
