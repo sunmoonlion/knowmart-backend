@@ -56,6 +56,10 @@ class Summons:
     async def record_summon(self, **kw):  # type: ignore[no-untyped-def]
         self.calls.append(kw)
 
+    async def ask_public_on_delivery(self, subject: str, knowbot_id: str) -> str:
+        self.calls.append({"ask_public": knowbot_id, "subject": subject})
+        return "pending"
+
 
 SUMMONS = Summons()
 
@@ -103,6 +107,43 @@ async def test_delivery_is_201_then_200_on_replay_and_409_on_change(wired) -> No
 
 
 @pytest.mark.asyncio
+async def test_delivery_may_ask_to_go_public(wired) -> None:
+    async with client() as c:
+        plain = (await _deliver(c, "delivery-0001")).json()
+        assert "listing_status" not in plain and SUMMONS.calls == []
+        asked = await c.post(
+            "/api/internal/v1/knowmart/deliveries",
+            json={
+                "delivery_id": "delivery-0002",
+                "owner_subject": OWNER,
+                "knowbot_ref": "lab-bot-1",
+                "manifest": manifest(version="2"),
+                "request_public": True,
+            },
+        )
+        assert asked.status_code == 201
+        assert asked.json()["listing_status"] == "pending"
+        assert asked.json()["version"] == "2"
+        assert SUMMONS.calls == [{"ask_public": plain["knowbot_id"], "subject": OWNER}]
+
+
+@pytest.mark.asyncio
+async def test_knowlab_stops_a_version_of_its_owner(wired) -> None:
+    async with client() as c:
+        knowbot = (await _deliver(c, "delivery-0001")).json()["knowbot_id"]
+        base = f"/api/internal/v1/knowmart/owners/{{owner}}/knowbots/{knowbot}"
+        others = await c.post(base.format(owner="someone-else") + "/versions/1/stop")
+        assert others.status_code == 404
+        missing = await c.post(base.format(owner=OWNER) + "/versions/9/stop")
+        assert missing.status_code == 404
+        for _ in range(2):  # 停过的再停照样 204
+            stopped = await c.post(base.format(owner=OWNER) + "/versions/1/stop")
+            assert stopped.status_code == 204
+        summon = f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{knowbot}@1"
+        assert (await c.get(summon)).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_summon_is_owner_scoped_and_hides_others(wired) -> None:
     async with client() as c:
         knowbot = (await _deliver(c, "delivery-0001")).json()["knowbot_id"]
@@ -141,6 +182,10 @@ async def test_internal_routes_require_their_own_relation() -> None:
         )
         assert no_token.status_code == 401
         no_token = await c.get("/api/internal/v1/knowmart/owners/u/knowbots/x@1")
+        assert no_token.status_code == 401
+        no_token = await c.post(
+            "/api/internal/v1/knowmart/owners/u/knowbots/x/versions/1/stop"
+        )
         assert no_token.status_code == 401
     # 公网地址来的：当没有这个接口，连令牌都不看
     async with client("http://testserver") as c:

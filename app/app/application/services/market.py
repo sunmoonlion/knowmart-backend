@@ -275,6 +275,29 @@ class MarketService:
         assert found is not None
         return expert_listing_view(found)
 
+    async def ask_public_on_delivery(self, subject: str, knowbot_id: str) -> str:
+        """knowlab 交付时带了「申请公开」（SDD 0037 第十八之二节）。
+
+        那边运营审核定了公开：发布主体与类目资质都过的，这一位进上架审核；不过的留
+        自用、不报错（资质在这里审，卖家补齐后可在「我发布的」再申请）。已在审、
+        已公开、被平台下架的不动。回上架状态。
+        """
+        bot = await self.repo.get_knowbot(knowbot_id)
+        if bot is None or bot["owner_subject"] != subject:
+            raise _missing("knowbot")
+        if bot["listing_status"] in ("pending", "public", "taken_down"):
+            return str(bot["listing_status"])
+        try:
+            check_category(bot["category"])
+            publisher = await self._qualified(subject, bot["category"])
+        except BadRequestError:
+            return str(bot["listing_status"])
+        async with self.repo.transaction():
+            await self.repo.update_knowbot(
+                bot["id"], publisher_id=publisher["id"], listing_status="pending"
+            )
+        return "pending"
+
     async def my_experts(self, subject: str) -> list[Row]:
         """我的专家：上架状态、价格、审核说明、类目（「我发布的」里设置公开与价格）。"""
         return [

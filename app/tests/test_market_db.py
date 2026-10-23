@@ -298,6 +298,34 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
             )
 
 
+async def test_knowlab_asks_public_on_delivery_only_qualified_go_to_review(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    bot = (await deliver(db, "delivery-0201", manifest())).knowbot_id
+    async with db() as session:
+        await session.execute(
+            text("update knowbot set category = :c where id = :i"),
+            {"c": "tools.office", "i": bot},
+        )
+        await session.commit()
+
+    async def ask(svc: MarketService, admin: MarketAdmin) -> str:
+        return await svc.ask_public_on_delivery(SELLER, str(bot))
+
+    assert await world.run(ask) == "self"  # 没有发布主体：留自用，不报错
+    await approved_publisher(world)
+    assert await world.run(ask) == "pending"
+    assert await world.run(ask) == "pending"
+
+    async def others(svc: MarketService, admin: MarketAdmin) -> None:
+        with pytest.raises(NotFoundError):
+            await svc.ask_public_on_delivery(OTHER, str(bot))
+        assert [e["knowbot_id"] for e in (await admin.queue())["experts"]] == [str(bot)]
+
+    await world.run(others)
+
+
 # ---------- 知识条目、需求与响应 ----------
 
 

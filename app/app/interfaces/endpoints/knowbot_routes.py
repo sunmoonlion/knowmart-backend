@@ -74,6 +74,9 @@ class DeliveryIn(Strict):
     owner_subject: str = Field(min_length=1, max_length=512)
     knowbot_ref: str = Field(min_length=1, max_length=128)
     manifest: dict[str, Any]
+    # knowlab 运营审核定了公开（SDD 0037 第十八之二节）：
+    # 资质过的进上架审核，不过的留自用
+    request_public: bool = False
 
 
 class SummonReturnIn(Strict):
@@ -86,10 +89,12 @@ async def deliver(
     _: Annotated[ServiceCaller, Depends(require_deliver_service)],
     body: DeliveryIn,
     svc: Service,
+    market: Annotated[MarketService, Depends(market_for_request)],
 ) -> JSONResponse:
     """knowlab 交付一个测试通过的版本。
 
-    幂等：同一交付单号重发，内容一样回 200，不一样回 409。
+    幂等：同一交付单号重发，内容一样回 200，不一样回 409。版本号按清单里的记（knowlab
+    测试通过时定，可以有空号）。带了申请公开的，回这一位的上架状态。
     """
     result = await svc.deliver(
         delivery_id=body.delivery_id,
@@ -97,17 +102,41 @@ async def deliver(
         knowbot_ref=body.knowbot_ref,
         manifest=body.manifest,
     )
+    content: dict[str, Any] = {
+        "contract_version": CONTRACT_VERSION,
+        "knowbot_id": str(result.knowbot_id),
+        "version": result.version,
+        "digest": result.digest,
+        "replayed": result.replayed,
+    }
+    if body.request_public:
+        content["listing_status"] = await market.ask_public_on_delivery(
+            body.owner_subject, str(result.knowbot_id)
+        )
     return JSONResponse(
         status_code=200 if result.replayed else 201,
-        content={
-            "contract_version": CONTRACT_VERSION,
-            "knowbot_id": str(result.knowbot_id),
-            "version": result.version,
-            "digest": result.digest,
-            "replayed": result.replayed,
-        },
+        content=content,
         headers=NO_STORE,
     )
+
+
+@internal_router.post(
+    "/owners/{owner_subject}/knowbots/{knowbot_id}/versions/{version}/stop",
+    status_code=204,
+)
+async def stop_delivered_version(
+    _: Annotated[ServiceCaller, Depends(require_deliver_service)],
+    svc: Service,
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+    knowbot_id: Annotated[str, Path(max_length=64)],
+    version: Annotated[str, Path(max_length=16)],
+) -> Response:
+    """knowlab 停用某一版（那边用户或运营停的，SDD 0037 第十八之二节）。
+
+    服务关系同交付；只认这个所有者的，别人的与没有的都是 404；停过的再停照样 204。
+    """
+    await svc.stop(owner_subject=owner_subject, knowbot_id=knowbot_id, version=version)
+    return Response(status_code=204, headers=NO_STORE)
 
 
 def _split_ref(ref: str) -> tuple[str, str]:
