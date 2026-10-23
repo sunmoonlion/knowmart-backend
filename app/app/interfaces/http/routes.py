@@ -6,6 +6,8 @@ from app.interfaces.endpoints.knowbot_routes import (
 )
 from app.interfaces.endpoints.knowbot_routes import web_router as knowbot_web_router
 from app.interfaces.endpoints.library_routes import router as library_router
+from app.interfaces.endpoints.market_routes import admin_router as market_admin_router
+from app.interfaces.endpoints.market_routes import web_router as market_web_router
 from app.interfaces.http.admin.auth import router as admin_auth_router
 from app.interfaces.http.admin.diagnostics import router as admin_diagnostics_router
 from app.interfaces.http.internal.delivery_metrics import (
@@ -26,3 +28,5 @@ router.include_router(knowbot_internal_router)
 router.include_router(knowbot_web_router)
 router.include_router(expert_router)
 router.include_router(library_router)
+router.include_router(market_web_router)
+router.include_router(market_admin_router)

@@ -21,7 +21,12 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from app.application.errors.exceptions import ServiceUnavailableError
+from app.application.errors.exceptions import (
+    BadGatewayError,
+    ConcurrencyConflictError,
+    NotFoundError,
+    ServiceUnavailableError,
+)
 from app.infrastructure.external.service_client import ServiceClient, service_relation
 
 BASE = "/api/internal/v1/user-data"
@@ -274,3 +279,52 @@ class KnowbaseUserData:
         if response.status_code == 204 or not response.content:
             return response.status_code, None, response.headers
         return response.status_code, response.json(), response.headers
+
+
+class KnowbaseVault:
+    """端口 KnowledgeVault 的实现（SDD 0042 第八节）。
+
+    核卖家的资料、成交时复制给买家。
+    """
+
+    def __init__(self, client: KnowbaseUserData) -> None:
+        self.client = client
+
+    async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
+        try:
+            return await self.client.item(user_token, item_id)
+        except KnowbaseRefused as exc:
+            if exc.status == 404:
+                raise NotFoundError(
+                    "This item is not in your knowledge base", code="item_not_found"
+                ) from None
+            raise BadGatewayError("knowbase refused", code=exc.code) from None
+
+    async def purchase(
+        self,
+        *,
+        seller: str,
+        seller_item_id: str,
+        buyer: str,
+        buyer_app: str,
+        transaction_ref: str,
+    ) -> dict[str, Any]:
+        try:
+            return await self.client.purchase(
+                seller=seller,
+                seller_item_id=seller_item_id,
+                buyer=buyer,
+                buyer_app=buyer_app,
+                transaction_ref=transaction_ref,
+            )
+        except KnowbaseRefused as exc:
+            if exc.status == 404:
+                raise NotFoundError(
+                    "The seller's copy is no longer there", code="item_gone"
+                ) from None
+            if exc.code == "quota_exceeded":
+                raise ConcurrencyConflictError(
+                    "Your knowledge base has no room for it",
+                    code="buyer_quota_exceeded",
+                ) from None
+            raise BadGatewayError("knowbase refused", code=exc.code) from None

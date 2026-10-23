@@ -17,7 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors.exceptions import BadRequestError, NotFoundError
 from app.application.services.knowbot_service import KnowbotService, version_view
-from app.bootstrap.knowbots import knowbot_service
+from app.application.services.market import MarketService
+from app.bootstrap.knowbots import knowbot_service, market_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.security import BrowserSession, Principal
 from app.infrastructure.security.relation_auth import (
@@ -56,6 +57,12 @@ def knowbot_settings() -> Settings:
 
 
 Service = Annotated[KnowbotService, Depends(service)]
+
+
+def market_for_request(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> MarketService:
+    return market_service(session)
 
 
 class Strict(BaseModel):
@@ -196,6 +203,7 @@ async def summon_return(
     session: Annotated[BrowserSession, Depends(get_web_browser_session)],
     body: SummonReturnIn,
     svc: Service,
+    market: Annotated[MarketService, Depends(market_for_request)],
     settings: Annotated[Settings, Depends(knowbot_settings)],
     knowbot_id: Annotated[str, Path(max_length=64)],
     version: Annotated[str, Path(max_length=16)],
@@ -219,6 +227,12 @@ async def summon_return(
         knowbot_id=knowbot_id,
         version=version,
         runtime=origin.app,
+    )
+    # 请的是别人公开的专家：记一笔成交（供需市场，本期不收钱）
+    await market.record_summon(
+        buyer=session.principal.subject,
+        knowbot_id=str(found.knowbot_id),
+        version=found.version.version,
     )
     return JSONResponse(
         content={

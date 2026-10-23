@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -13,7 +14,9 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -45,9 +48,23 @@ class Knowbot(TimestampMixin, Base):
     publisher_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("publisher.id", ondelete="RESTRICT")
     )
+    # 供需市场（SDD 0018 第十一节）：每次请的价格（空是免费）、上架审核
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    listing_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="self"
+    )
+    listing_review_note: Mapped[str | None] = mapped_column(Text)
+    listing_reviewed_by: Mapped[str | None] = mapped_column(String(512))
+    listing_reviewed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     __table_args__ = (
         UniqueConstraint("source_ref", name="uq_knowbot_source_ref"),
+        CheckConstraint(
+            "listing_status IN ('self', 'pending', 'public', 'rejected', 'taken_down')",
+            name="ck_knowbot_listing_status",
+        ),
         Index("ix_knowbot_owner_subject", "owner_subject"),
         CheckConstraint(
             "visibility IN ('private', 'public')", name="ck_knowbot_visibility"
@@ -77,10 +94,27 @@ class Publisher(TimestampMixin, Base):
         Boolean, nullable=False, default=False
     )
     credit_code: Mapped[str | None] = mapped_column(String(32))
+    # 供需市场（SDD 0018 第十一节第 5 小节）：按用户一条，运营审过才算实名
+    owner_subject: Mapped[str | None] = mapped_column(String(512))
+    review_status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_by: Mapped[str | None] = mapped_column(String(512))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    real_name: Mapped[str | None] = mapped_column(String(100))
+    id_number_masked: Mapped[str | None] = mapped_column(String(32))
+    id_number_hash: Mapped[str | None] = mapped_column(String(64))
+    legal_person: Mapped[str | None] = mapped_column(String(100))
+    contact_name: Mapped[str | None] = mapped_column(String(100))
 
     __table_args__ = (
         CheckConstraint(
             "kind IN ('individual', 'organization')", name="ck_publisher_kind"
+        ),
+        CheckConstraint(
+            "review_status IN ('pending', 'approved', 'rejected')",
+            name="ck_publisher_review_status",
         ),
     )
 
@@ -108,6 +142,12 @@ class PublisherLicense(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # 证照照片、审核说明、到期前提醒过的时间（SDD 0018 第十一节第 5 小节）
+    document_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("publisher_document.id", ondelete="SET NULL")
+    )
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         CheckConstraint(

@@ -1,0 +1,570 @@
+"""供需市场在真 PostgreSQL 上（SDD 0018 第十一节）：发布主体与资质、专家与知识两种供给、
+需求与响应、成交与评价、留言、举报、定时活、驻场规则。"""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
+from typing import Any
+
+import pytest
+from pydantic import ValidationError as PydanticValidationError
+from sqlalchemy import text
+
+from app.application.errors.exceptions import (
+    BadRequestError,
+    ConcurrencyConflictError,
+    NotFoundError,
+)
+from app.application.services.knowbot_service import KnowbotService
+from app.application.services.market import MarketAdmin, MarketService
+from app.domain.market import (
+    BuyIn,
+    DemandIn,
+    ExpertListingIn,
+    KnowledgeListingIn,
+    LicenseIn,
+    MessageIn,
+    PublisherIn,
+    ReplyIn,
+    ReportDecision,
+    ReportIn,
+    ResponseIn,
+    ReviewDecision,
+    ReviewIn,
+)
+from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
+from app.infrastructure.repositories.market import SqlMarketRepository
+from tests.knowbot_fakes import manifest
+from tests.test_knowbot_repository_db import OWNER, db, deliver  # noqa: F401
+
+SELLER = OWNER
+BUYER = "8b1f5c1e-0000-4000-8000-000000000002"
+OTHER = "8b1f5c1e-0000-4000-8000-000000000003"
+OPS = "ops-1"
+PNG = b"\x89PNG\r\n\x1a\n" + b"0" * 100
+NOW = datetime(2026, 10, 23, 12, tzinfo=UTC)
+
+
+class Vault:
+    """knowbase 的替身：卖家 knowmart 知识库里的资料，成交时复制给买家。"""
+
+    def __init__(self) -> None:
+        self.items = {
+            "d1": {
+                "name": "行业数据 2024.xlsx",
+                "media_type": "application/vnd.ms-excel",
+                "size_bytes": 10,
+                "sha256": "a" * 64,
+            },
+            "d2": {
+                "name": "样张.csv",
+                "media_type": "text/csv",
+                "size_bytes": 4,
+                "sha256": "b" * 64,
+            },
+        }
+        self.purchases: list[dict[str, Any]] = []
+
+    async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
+        if item_id not in self.items:
+            raise NotFoundError("no", code="item_not_found")
+        return self.items[item_id]
+
+    async def purchase(self, **kw: Any) -> dict[str, Any]:
+        self.purchases.append(kw)
+        source = self.items[kw["seller_item_id"]]
+        return {
+            "item_id": f"copy-{len(self.purchases)}",
+            "name": source["name"],
+            "sha256": source["sha256"],
+        }
+
+
+async def token() -> str:
+    return "user-token"
+
+
+class World:
+    def __init__(self, db, vault: Vault) -> None:  # noqa: F811
+        self.db = db
+        self.vault = vault
+        self.now = NOW
+
+    def svc(self, session) -> MarketService:  # type: ignore[no-untyped-def]
+        return MarketService(
+            SqlMarketRepository(session),
+            SqlKnowbotRepository(session),
+            self.vault,
+            now=lambda: self.now,
+        )
+
+    def admin(self, session) -> MarketAdmin:  # type: ignore[no-untyped-def]
+        return MarketAdmin(SqlMarketRepository(session), now=lambda: self.now)
+
+    async def run(self, work):  # type: ignore[no-untyped-def]
+        async with self.db() as session:
+            return await work(self.svc(session), self.admin(session))
+
+
+@pytest.fixture
+def world(db):  # noqa: F811
+    return World(db, Vault())
+
+
+async def approved_publisher(world: World, subject: str = SELLER) -> str:
+    async def work(svc: MarketService, admin: MarketAdmin):
+        mine = await svc.save_publisher(
+            subject,
+            PublisherIn(
+                kind="individual",
+                name="张三工作室",
+                real_name="张三",
+                id_number="11010519491231002X",
+            ),
+        )
+        await svc.add_document(subject, "id_front", "image/png", PNG)
+        await admin.decide_publisher(
+            mine["publisher"]["publisher_id"], ReviewDecision(approve=True), OPS
+        )
+        return mine["publisher"]["publisher_id"]
+
+    return await world.run(work)
+
+
+# ---------- 发布主体与资质 ----------
+
+
+async def test_a_publisher_is_reviewed_before_it_counts(world: World) -> None:
+    async def work(svc: MarketService, admin: MarketAdmin):
+        mine = await svc.save_publisher(
+            SELLER,
+            PublisherIn(
+                kind="individual",
+                name="张三工作室",
+                real_name="张三",
+                id_number="11010519491231002x",
+            ),
+        )
+        p = mine["publisher"]
+        assert (
+            p["review_status"] == "pending"
+            and p["id_number_masked"] == "110***********002X"
+        )
+        assert "id_number_hash" not in p and p["real_name_verified"] is False
+        # 同一个身份证号别的账号不能再用
+        with pytest.raises(ConcurrencyConflictError):
+            await svc.save_publisher(
+                OTHER,
+                PublisherIn(
+                    kind="individual",
+                    name="冒用",
+                    real_name="李四",
+                    id_number="11010519491231002X",
+                ),
+            )
+        with pytest.raises(BadRequestError):
+            await svc.add_document(SELLER, "id_front", "image/gif", PNG)
+        doc = await svc.add_document(SELLER, "id_front", "image/png", PNG)
+        queue = await admin.queue()
+        assert [x["publisher_id"] for x in queue["publishers"]] == [p["publisher_id"]]
+        assert (
+            queue["publishers"][0]["documents"][0]["document_id"] == doc["document_id"]
+        )
+        assert (await admin.document(doc["document_id"]))["content"] == PNG
+        with pytest.raises(PydanticValidationError):  # 不通过要写理由
+            ReviewDecision(approve=False)
+        await admin.decide_publisher(
+            p["publisher_id"], ReviewDecision(approve=True), OPS
+        )
+        after = (await svc.my_publisher(SELLER))["publisher"]
+        assert (
+            after["review_status"] == "approved" and after["real_name_verified"] is True
+        )
+        # 要证照的类目：传证照、审过才算
+        license_doc = await svc.add_document(
+            SELLER, "license", "application/pdf", b"%PDF-1"
+        )
+        lic = await svc.add_license(
+            SELLER,
+            LicenseIn(
+                category="finance.securities_advisory",
+                license_name="经营证券期货业务许可证",
+                license_no="000001",
+                valid_until=date(2027, 1, 1),
+                document_id=license_doc["document_id"],
+            ),
+        )
+        assert lic["review_status"] == "pending"
+        await admin.decide_license(lic["license_id"], ReviewDecision(approve=True), OPS)
+        with pytest.raises(BadRequestError):  # 不要证照的类目不收证照
+            await svc.add_license(
+                SELLER,
+                LicenseIn(
+                    category="tools.office",
+                    license_name="x",
+                    license_no="1",
+                    document_id=license_doc["document_id"],
+                ),
+            )
+
+    await world.run(work)
+
+
+# ---------- 专家条目 ----------
+
+
+async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    bot = (await deliver(db, "delivery-0101", manifest())).knowbot_id
+    async with db() as session:
+        await session.execute(
+            text("update knowbot set category = :c where id = :i"),
+            {"c": "tools.office", "i": bot},
+        )
+        await session.commit()
+
+    async def no_publisher(svc: MarketService, admin: MarketAdmin):
+        with pytest.raises(BadRequestError) as refused:
+            await svc.set_expert_listing(
+                SELLER,
+                str(bot),
+                ExpertListingIn(visibility="public", price=Decimal("9.9")),
+            )
+        assert refused.value.code == "publisher_required"
+
+    await world.run(no_publisher)
+    await approved_publisher(world)
+
+    async def go_public(svc: MarketService, admin: MarketAdmin):
+        listing = await svc.set_expert_listing(
+            SELLER,
+            str(bot),
+            ExpertListingIn(visibility="public", price=Decimal("9.90")),
+        )
+        assert (listing["listing_status"], listing["visibility"], listing["price"]) == (
+            "pending",
+            "private",
+            "9.90",
+        )
+        assert [e["knowbot_id"] for e in (await admin.queue())["experts"]] == [str(bot)]
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+
+    await world.run(go_public)
+    async with db() as session:
+        knowbots = KnowbotService(SqlKnowbotRepository(session), public_market=True)
+        found = await knowbots.summon(
+            owner_subject=BUYER, knowbot_id=str(bot), version="1", runtime="knowbench"
+        )
+        assert found.version.version == "1"
+        closed = KnowbotService(SqlKnowbotRepository(session), public_market=False)
+        with pytest.raises(NotFoundError):  # 平台没开公开：别人请不了
+            await closed.summon(
+                owner_subject=BUYER,
+                knowbot_id=str(bot),
+                version="1",
+                runtime="knowbench",
+            )
+
+    async def trade(svc: MarketService, admin: MarketAdmin):
+        assert (
+            await svc.record_summon(buyer=SELLER, knowbot_id=str(bot), version="1")
+            is None
+        )
+        made = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+        assert made and made["price"] == "9.90" and made["listing_ref"] == f"{bot}@1"
+        await svc.review(BUYER, made["trade_id"], ReviewIn(rating=4, text="好用"))
+        with pytest.raises(ConcurrencyConflictError):
+            await svc.review(BUYER, made["trade_id"], ReviewIn(rating=5))
+        await svc.reply(SELLER, made["trade_id"], ReplyIn(reply="谢谢"))
+        market = await svc.expert_market(str(bot))
+        assert market["rating"] == {"count": 1, "average": 4.0}
+        assert market["reviews"][0]["reply"] == "谢谢"
+        # 平台下架：不再公开
+        await admin.take_down("expert", f"{bot}@1", "被举报核实", OPS)
+
+    await world.run(trade)
+    async with db() as session:
+        knowbots = KnowbotService(SqlKnowbotRepository(session), public_market=True)
+        with pytest.raises(NotFoundError):
+            await knowbots.summon(
+                owner_subject=BUYER,
+                knowbot_id=str(bot),
+                version="1",
+                runtime="knowbench",
+            )
+
+
+# ---------- 知识条目、需求与响应 ----------
+
+
+def knowledge(**over: Any) -> KnowledgeListingIn:
+    body: dict[str, Any] = {
+        "title": "2024 行业数据",
+        "category": "tools.lookup",
+        "description": "一份表，覆盖 2024 年各月",
+        "items": [{"item_id": "d1"}],
+        "sample": "月份,销量\n1,10",
+        "rights_statement": "我自己整理，有权出售",
+        "price": "50",
+    }
+    return KnowledgeListingIn.model_validate(body | over)
+
+
+async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) -> None:
+    async def draft(svc: MarketService, admin: MarketAdmin):
+        made = await svc.create_listing(SELLER, knowledge(), token)
+        assert made["status"] == "draft" and made["items"][0]["item_id"] == "d1"
+        with pytest.raises(BadRequestError) as refused:
+            await svc.submit_listing(SELLER, made["listing_id"])
+        assert refused.value.code == "publisher_required"
+        return made["listing_id"]
+
+    listing_id = await world.run(draft)
+    await approved_publisher(world)
+
+    async def review(svc: MarketService, admin: MarketAdmin):
+        assert (await svc.submit_listing(SELLER, listing_id))["status"] == "pending"
+        with pytest.raises(NotFoundError):  # 审过之前别人看不到
+            await svc.listing(BUYER, listing_id)
+        queue = await admin.queue()
+        assert [k["listing_id"] for k in queue["knowledge"]] == [listing_id]
+        await admin.decide_listing(listing_id, ReviewDecision(approve=True), OPS)
+        market = await svc.knowledge_market(q="行业", category="tools", page=1)
+        assert [i["listing_id"] for i in market["items"]] == [listing_id]
+        assert (
+            "item_id" not in market["items"][0]["items"][0]
+        )  # 买家看不到卖家的资料编号
+
+    await world.run(review)
+
+    async def buy(svc: MarketService, admin: MarketAdmin):
+        with pytest.raises(BadRequestError):
+            await svc.buy(SELLER, listing_id, BuyIn(target_app="knowbench"))
+        trade = await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+        assert (trade["kind"], trade["price"], trade["target_app"]) == (
+            "knowledge",
+            "50.00",
+            "knowbench",
+        )
+        assert [c["item_id"] for c in trade["copied"]] == ["copy-1"]
+        assert (
+            world.vault.purchases[0]["buyer"] == BUYER
+            and world.vault.purchases[0]["buyer_app"] == "knowbench"
+        )
+        assert [t["trade_id"] for t in await svc.my_trades(BUYER, "buyer")] == [
+            trade["trade_id"]
+        ]
+        assert [t["trade_id"] for t in await svc.my_trades(SELLER, "seller")] == [
+            trade["trade_id"]
+        ]
+        # 买来、不许转卖的：拿同样的内容再上架不行
+        with pytest.raises(BadRequestError) as refused:
+            await svc.create_listing(BUYER, knowledge(), token)
+        assert refused.value.code == "resale_not_allowed"
+        # 卖家下架：买家那份照旧在（成交记录还在）
+        assert (await svc.delist_listing(SELLER, listing_id))["status"] == "delisted"
+        assert len(await svc.my_trades(BUYER, "buyer")) == 1
+
+    await world.run(buy)
+
+
+async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:
+    await approved_publisher(world)
+
+    async def flow(svc: MarketService, admin: MarketAdmin):
+        listing = await svc.create_listing(SELLER, knowledge(), token)
+        await svc.submit_listing(SELLER, listing["listing_id"])
+        await admin.decide_listing(
+            listing["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        demand = await svc.create_demand(
+            BUYER,
+            DemandIn(
+                kind="knowledge",
+                title="要 2024 行业数据",
+                problem="做行业对比",
+                deadline=date(2026, 11, 30),
+                budget=Decimal("80"),
+            ),
+        )
+        assert [
+            d["demand_id"]
+            for d in (
+                await svc.demand_hall(kind="knowledge", q=None, page=1, viewer=OTHER)
+            )["items"]
+        ] == [demand["demand_id"]]
+        with pytest.raises(BadRequestError):
+            await svc.respond(
+                BUYER, demand["demand_id"], ResponseIn(proposal="自己响应自己")
+            )
+        offer = await svc.respond(
+            SELLER,
+            demand["demand_id"],
+            ResponseIn(
+                listing_kind="knowledge",
+                listing_ref=listing["listing_id"],
+                proposal="现成的",
+                price=Decimal("50"),
+            ),
+        )
+        other = await svc.respond(
+            OTHER, demand["demand_id"], ResponseIn(proposal="我可以做一份", days=7)
+        )
+        with pytest.raises(ConcurrencyConflictError):
+            await svc.respond(
+                OTHER, demand["demand_id"], ResponseIn(proposal="再来一次")
+            )
+        # 响应只有需求方与那位卖家看得到；别人只看到有几个
+        seen_by_other = await svc.demand(OTHER, demand["demand_id"])
+        assert seen_by_other["response_count"] == 2
+        assert [r["response_id"] for r in seen_by_other["responses"]] == [
+            other["response_id"]
+        ]
+        assert len((await svc.demand(BUYER, demand["demand_id"]))["responses"]) == 2
+        # 留言：响应下的只有两位能看能说
+        await svc.post_message(
+            BUYER, "response", offer["response_id"], MessageIn(body="能先看样张吗")
+        )
+        with pytest.raises(NotFoundError):
+            await svc.messages(OTHER, "response", offer["response_id"])
+        said = await svc.messages(SELLER, "response", offer["response_id"])
+        assert [(m["role"], m["mine"]) for m in said] == [("buyer", False)]
+        await svc.post_message(
+            OTHER, "demand", demand["demand_id"], MessageIn(body="期限能延吗")
+        )
+        assert len(await svc.messages(BUYER, "demand", demand["demand_id"])) == 1
+        # 选一家：别的结束
+        chosen = await svc.choose_response(
+            BUYER, demand["demand_id"], offer["response_id"]
+        )
+        assert chosen["status"] == "chosen"
+        assert {r["response_id"]: r["status"] for r in chosen["responses"]} == {
+            offer["response_id"]: "chosen",
+            other["response_id"]: "not_chosen",
+        }
+        trade = await svc.buy(
+            BUYER,
+            listing["listing_id"],
+            BuyIn(target_app="knowlab", demand_id=demand["demand_id"]),
+        )
+        assert trade["demand_id"] == demand["demand_id"]
+        assert (await svc.demand(BUYER, demand["demand_id"]))["status"] == "closed"
+        mine = await svc.my_responses(SELLER)
+        assert mine[0]["demand"]["title"] == "要 2024 行业数据"
+
+    await world.run(flow)
+
+
+# ---------- 举报、定时活、驻场规则 ----------
+
+
+async def test_reports_take_things_down(world: World) -> None:
+    await approved_publisher(world)
+
+    async def flow(svc: MarketService, admin: MarketAdmin):
+        listing = await svc.create_listing(
+            SELLER, knowledge(description="稳赚不赔的目标价"), token
+        )
+        await svc.submit_listing(SELLER, listing["listing_id"])
+        queue = await admin.queue()
+        assert set(queue["knowledge"][0]["flagged"]) >= {"稳赚", "目标价"}
+        await admin.decide_listing(
+            listing["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        report = await svc.report(
+            BUYER,
+            ReportIn(
+                target_kind="knowledge",
+                target_id=listing["listing_id"],
+                reason="有收益承诺",
+            ),
+        )
+        assert [r["report_id"] for r in await admin.reports("open")] == [
+            report["report_id"]
+        ]
+        await admin.decide_report(
+            report["report_id"], ReportDecision(uphold=True, note="核实"), OPS
+        )
+        with pytest.raises(NotFoundError):
+            await svc.listing(BUYER, listing["listing_id"])
+        assert (await svc.listing(SELLER, listing["listing_id"]))[
+            "status"
+        ] == "taken_down"
+
+    await world.run(flow)
+
+
+async def test_licenses_expire_and_photos_are_purged(world: World, db) -> None:  # noqa: F811
+    bot = (await deliver(db, "delivery-0201", manifest(), ref="lab-bot-2")).knowbot_id
+    async with db() as session:
+        await session.execute(
+            text("update knowbot set category = :c where id = :i"),
+            {"c": "finance.securities_advisory", "i": bot},
+        )
+        await session.commit()
+    await approved_publisher(world)
+
+    async def license_and_list(svc: MarketService, admin: MarketAdmin):
+        doc = await svc.add_document(SELLER, "license", "application/pdf", b"%PDF-1")
+        lic = await svc.add_license(
+            SELLER,
+            LicenseIn(
+                category="finance.securities_advisory",
+                license_name="许可证",
+                license_no="9",
+                valid_until=date(2026, 11, 10),
+                document_id=doc["document_id"],
+            ),
+        )
+        await admin.decide_license(lic["license_id"], ReviewDecision(approve=True), OPS)
+        await svc.set_expert_listing(
+            SELLER, str(bot), ExpertListingIn(visibility="public")
+        )
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+        assert (await admin.sweep())["reminded"] == 1  # 30 天内到期：提醒
+        assert (await admin.sweep())["reminded"] == 0  # 提醒过不再提醒
+        lics = (await svc.my_publisher(SELLER))["licenses"]
+        assert lics[0]["expiring"] is True
+
+    await world.run(license_and_list)
+    world.now = NOW + timedelta(days=30)
+
+    async def expired(svc: MarketService, admin: MarketAdmin):
+        result = await admin.sweep()
+        assert result["expired"] == 1
+        found = await svc.repo.get_knowbot(str(bot))
+        assert (found["visibility"], found["listing_status"]) == ("private", "self")
+
+    await world.run(expired)
+    world.now = NOW + timedelta(days=400)
+
+    async def purged(svc: MarketService, admin: MarketAdmin):
+        assert (await admin.sweep())["purged"] >= 1
+        docs = (await svc.my_publisher(SELLER))["documents"]
+        assert all(d["purged"] for d in docs if d["kind"] != "license")
+
+    await world.run(purged)
+
+
+async def test_house_rules_have_versions(world: World) -> None:
+    async def flow(svc: MarketService, admin: MarketAdmin):
+        first = await svc.rules()
+        assert first["version"] == 0 and first["body"].startswith("# 驻场规则")
+        await admin.publish_rules("# 驻场规则（第 2 版）\n\n改了一条。", OPS)
+        assert (await svc.rules())["version"] == 1
+
+    await world.run(flow)
+
+
+def test_id_numbers_are_checked() -> None:
+    with pytest.raises(PydanticValidationError):
+        PublisherIn(
+            kind="individual", name="x", real_name="x", id_number="12345678901234567A"
+        )
+    with pytest.raises(PydanticValidationError):
+        PublisherIn(
+            kind="organization", name="某公司", credit_code="91110000000000000X"
+        )

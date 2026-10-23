@@ -29,6 +29,8 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     fake_auth = FakeAuthService({"member": session("web", "profile:read")})
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_auth)
     app.dependency_overrides[knowbot_routes.service] = lambda: svc
+    app.dependency_overrides[knowbot_routes.market_for_request] = lambda: SUMMONS
+    SUMMONS.calls.clear()
     app.dependency_overrides[require_deliver_service] = lambda: _caller("knowlab")
     app.dependency_overrides[require_summon_service] = lambda: _caller("knowbench")
     app.dependency_overrides[knowbot_routes.knowbot_settings] = lambda: (
@@ -43,6 +45,19 @@ def wired(monkeypatch: pytest.MonkeyPatch):
     )
     yield svc, repo
     app.dependency_overrides.clear()
+
+
+class Summons:
+    """市场的替身：「请这位」时记一笔成交（请别人公开的专家才记，SDD 0018）。"""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def record_summon(self, **kw):  # type: ignore[no-untyped-def]
+        self.calls.append(kw)
+
+
+SUMMONS = Summons()
 
 
 def _caller(name: str) -> ServiceCaller:
@@ -178,6 +193,10 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
             "ref": ["task-42"],
             "knowbot": [f"{knowbot}@1"],
         }
+        # 交给市场判是不是请别人的（是才记成交）
+        assert SUMMONS.calls == [
+            {"buyer": OWNER, "knowbot_id": knowbot, "version": "1"}
+        ]
         unknown = await c.post(url, json={"from": "evil", "ref": "x"}, headers=headers)
         assert unknown.status_code == 400
         assert (await c.post(url, json={"from": "knowbench"})).status_code == 403

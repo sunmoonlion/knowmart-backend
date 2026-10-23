@@ -22,6 +22,7 @@ from app.application.ports.knowbots import (
     PublisherRecord,
     VersionStatus,
 )
+from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
 from app.infrastructure.models.knowbots import (
     Knowbot,
     KnowbotVersion,
@@ -57,6 +58,12 @@ def _knowbot(row: Knowbot, versions: Sequence[KnowbotVersion] = ()) -> KnowbotRe
         visibility=row.visibility,  # type: ignore[arg-type]
         publisher_id=row.publisher_id,
     )
+
+
+# 不要证照就能公开的类目（未分类不能公开）
+NO_LICENSE_CATEGORIES = tuple(
+    c.code for c in CATEGORIES if not c.license and c.code != DEFAULT_CATEGORY
+)
 
 
 def _license_valid(today: date):
@@ -196,7 +203,19 @@ class SqlKnowbotRepository:
                 PublisherLicense.category == Knowbot.category,
                 _license_valid(today),
             )
-            visible = or_(visible, and_(Knowbot.visibility == "public", licensed))
+            # 不要证照的类目：发布主体实名审过就行（SDD 0018 第十一节第 5 小节）
+            verified = and_(
+                Knowbot.category.in_(NO_LICENSE_CATEGORIES),
+                exists().where(
+                    Publisher.id == Knowbot.publisher_id,
+                    Publisher.review_status == "approved",
+                    Publisher.real_name_verified.is_(True),
+                ),
+            )
+            visible = or_(
+                visible,
+                and_(Knowbot.visibility == "public", or_(licensed, verified)),
+            )
         return await self._with_versions(
             select(Knowbot).where(visible).order_by(Knowbot.created_at, Knowbot.id)
         )
@@ -222,7 +241,11 @@ class SqlKnowbotRepository:
             .scalars()
             .all()
         )
-        if not licenses:
+        if not licenses and not (
+            category in NO_LICENSE_CATEGORIES
+            and publisher.review_status == "approved"
+            and publisher.real_name_verified
+        ):
             return None
         return PublisherRecord(
             id=publisher.id,

@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from app.application.errors.exceptions import (
@@ -61,8 +62,18 @@ def _not_found() -> NotFoundError:
 
 
 class KnowbotService:
-    def __init__(self, repo: KnowbotRepository) -> None:
+    def __init__(
+        self,
+        repo: KnowbotRepository,
+        *,
+        public_market: bool = False,
+        now: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
         self.repo = repo
+        # 平台开了公开（PUBLIC_MARKET_ENABLED）：公开、资质有效的专家别人也能请
+        # （SDD 0018 第十一节）
+        self.public_market = public_market
+        self.now = now
 
     async def deliver(
         self,
@@ -158,8 +169,11 @@ class KnowbotService:
         version: str,
         runtime: str,
     ) -> SummonedVersion:
-        """运行方「请」：只给所有者自己的、未停用的、运行方是这个调用方的这一版。"""
-        bot = await self._owned(owner_subject, knowbot_id)
+        """运行方「请」：所有者自己的，或公开、资质有效的；未停用的、运行方是这个调用方的这一版。
+
+        owner_subject 是请的人（运行方那头的登录用户）。
+        """
+        bot = await self._summonable(owner_subject, knowbot_id)
         if not VERSION.fullmatch(version or ""):
             raise _not_found()
         found = await self.repo.get_version(bot.id, version)
@@ -170,6 +184,31 @@ class KnowbotService:
         return SummonedVersion(
             knowbot_id=bot.id, name=bot.name, tagline=bot.tagline, version=found
         )
+
+    async def _summonable(self, subject: str, knowbot_id: str) -> KnowbotRecord:
+        """自己的都能请；别人的要平台开了公开、专家公开、发布主体在这个类目上有效。"""
+        if not OWNER.fullmatch(subject or ""):
+            raise _not_found()
+        try:
+            bot_id = uuid.UUID(knowbot_id)
+        except (ValueError, TypeError) as exc:
+            raise _not_found() from exc
+        bot = await self.repo.get_knowbot(bot_id)
+        if bot is None:
+            raise _not_found()
+        if bot.owner_subject == subject:
+            return bot
+        if (
+            self.public_market
+            and bot.visibility == "public"
+            and bot.publisher_id is not None
+            and await self.repo.licensed_publisher(
+                bot.publisher_id, bot.category, today=self.now().date()
+            )
+            is not None
+        ):
+            return bot
+        raise _not_found()
 
     async def list_for_owner(self, owner_subject: str) -> Sequence[KnowbotRecord]:
         if not OWNER.fullmatch(owner_subject or ""):

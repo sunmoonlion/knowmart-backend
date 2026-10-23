@@ -105,9 +105,11 @@ if os.environ.get("CELERY_BROKER_URL"):
     configure_celery()
 
 import app.tasks.durable_delivery  # noqa: E402, F401 — shared durable transport
+import app.tasks.market  # noqa: E402, F401 — 供需市场的定时活
 import app.tasks.ping  # noqa: E402, F401 — register tasks
 
 celery_app.conf.beat_schedule = {
     **(celery_app.conf.beat_schedule or {}),
     "durable-delivery": {"task": "app.tasks.durable_delivery.pump", "schedule": 5.0},
+    "market-sweep": {"task": "app.tasks.market.sweep", "schedule": 3600.0},
 }
