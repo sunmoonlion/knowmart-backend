@@ -239,6 +239,7 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
     await approved_publisher(world)
 
     async def go_public(svc: MarketService, admin: MarketAdmin):
+        assert [e["knowbot_id"] for e in await svc.my_experts(SELLER)] == [str(bot)]
         listing = await svc.set_expert_listing(
             SELLER,
             str(bot),

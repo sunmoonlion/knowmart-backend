@@ -143,6 +143,12 @@ async def add_license(principal: User, body: LicenseIn, svc: Service) -> JSONRes
     )
 
 
+@web_router.get("/experts/mine")
+async def my_experts(principal: User, svc: Service) -> JSONResponse:
+    """我的专家：上架状态与价格。"""
+    return ok(await svc.my_experts(principal.subject))
+
+
 @web_router.put("/experts/{knowbot_id}/listing")
 async def expert_listing(
     principal: User, body: ExpertListingIn, svc: Service, knowbot_id: Id

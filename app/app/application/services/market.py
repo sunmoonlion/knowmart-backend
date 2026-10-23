@@ -275,6 +275,13 @@ class MarketService:
         assert found is not None
         return expert_listing_view(found)
 
+    async def my_experts(self, subject: str) -> list[Row]:
+        """我的专家：上架状态、价格、审核说明、类目（「我发布的」里设置公开与价格）。"""
+        return [
+            {**expert_listing_view(bot), "category": category_view(bot["category"])}
+            for bot in await self.repo.knowbots_of(subject)
+        ]
+
     async def record_summon(
         self, *, buyer: str, knowbot_id: str, version: str
     ) -> Row | None:

@@ -251,6 +251,16 @@ class SqlMarketRepository:
         row = await self.session.get(Knowbot, key) if key else None
         return None if row is None else _row(row)
 
+    async def knowbots_of(self, subject: str) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(Knowbot)
+                .where(Knowbot.owner_subject == subject)
+                .order_by(Knowbot.created_at, Knowbot.id)
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
     async def update_knowbot(self, knowbot_id: uuid.UUID, **fields: Any) -> None:
         await self.session.execute(
             update(Knowbot).where(Knowbot.id == knowbot_id).values(**fields)
