@@ -93,8 +93,41 @@ def _text(value: object, limit: int = 2000) -> str:
 
 
 def accepts_user_data(manifest: dict[str, Any]) -> bool:
-    """专家接不接受请的人自己的数据（第二期起清单才会声明；现在都不接受）。"""
-    return manifest.get("accepts_user_data") is True
+    """请它时要不要请的人提供自己的数据：写了数据需求声明的要（SDD 0042 第五节）。"""
+    return bool(data_needs(manifest)) or manifest.get("accepts_user_data") is True
+
+
+def data_needs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """详情页「需要你提供哪些数据」：清单的数据需求声明（交付时已按外层模型核过）。"""
+    raw = manifest.get("data_needs")
+    needs = []
+    for n in raw if isinstance(raw, list) else []:
+        if not isinstance(n, dict):
+            continue
+        tables = [t for t in n.get("tables") or [] if isinstance(t, dict)]
+        needs.append(
+            {
+                "key": _text(n.get("key"), 40),
+                "name": _text(n.get("name"), 80),
+                "description": _text(n.get("description"), 500),
+                "formats": [f for f in n.get("formats") or [] if isinstance(f, str)],
+                "required": n.get("required", True) is not False,
+                "min_count": int(n.get("min_count") or 1),
+                "max_count": int(n.get("max_count") or 1),
+                "tables": [
+                    {
+                        "sheet": _text(t.get("sheet"), 100) or None,
+                        "columns": [
+                            _text(c, 100)
+                            for c in t.get("columns") or []
+                            if _text(c, 100)
+                        ],
+                    }
+                    for t in tables
+                ],
+            }
+        )
+    return needs
 
 
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
@@ -124,6 +157,8 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
                 }
                 for b in bindings
             ],
+            # 写了数据需求声明的（新格式）：请它时按这几样从自己的知识库选
+            "needs": data_needs(manifest),
             "accepts_user_data": accepts_user_data(manifest),
         },
         "delivers": [

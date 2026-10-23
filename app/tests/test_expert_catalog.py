@@ -259,6 +259,7 @@ def test_sections_read_what_the_manifest_has() -> None:
     assert owner["scope"] == {"does": "看走势", "does_not": "荐股", "elsewhere": ""}
     assert owner["data"] == {
         "bundled": [{"dataset_id": "ds-600519", "version": "3"}],
+        "needs": [],
         "accepts_user_data": False,
     }
     assert owner["delivers"] == [{"step": "成稿", "file": "底稿/成稿.md"}]
@@ -268,4 +269,37 @@ def test_sections_read_what_the_manifest_has() -> None:
     bare = manifest()
     assert expert_sections(bare, owner=False)["delivers"] == [
         {"step": "读财报", "file": None}
+    ]
+
+
+def test_the_detail_page_says_what_data_you_bring() -> None:
+    """SDD 0042 第五节：写了数据需求声明的专家，详情页列出要你提供的几样。"""
+    doc = manifest(
+        data_bindings=[],
+        data_needs=[
+            {
+                "key": "statements",
+                "name": "三张报表",
+                "description": "最近三年",
+                "formats": ["excel", "csv"],
+                "required": True,
+                "min_count": 1,
+                "max_count": 3,
+                "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
+            }
+        ],
+    )
+    data = expert_sections(doc, owner=False)["data"]
+    assert data["accepts_user_data"] is True and data["bundled"] == []
+    assert data["needs"] == [
+        {
+            "key": "statements",
+            "name": "三张报表",
+            "description": "最近三年",
+            "formats": ["excel", "csv"],
+            "required": True,
+            "min_count": 1,
+            "max_count": 3,
+            "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
+        }
     ]
