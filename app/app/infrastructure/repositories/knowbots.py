@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any
 
-from sqlalchemy import and_, delete, exists, or_, select, update
+from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -230,28 +230,30 @@ class SqlKnowbotRepository:
             )
         ).scalar_one_or_none()
 
-    async def replace_unlisted(
-        self,
-        *,
-        owner_subject: str,
-        source_ref: str,
-        versions: Sequence[tuple[str, str]],
+    async def put_unlisted(
+        self, *, owner_subject: str, source_ref: str, version: str, outcome: str
     ) -> None:
+        values = {
+            "source_ref": source_ref,
+            "version": version,
+            "owner_subject": owner_subject,
+            "outcome": outcome,
+        }
         await self.session.execute(
-            delete(KnowbotUnlistedVersion).where(
-                KnowbotUnlistedVersion.source_ref == source_ref
+            insert(KnowbotUnlistedVersion)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=[
+                    KnowbotUnlistedVersion.source_ref,
+                    KnowbotUnlistedVersion.version,
+                ],
+                set_={
+                    "owner_subject": owner_subject,
+                    "outcome": outcome,
+                    "updated_at": func.now(),
+                },
             )
         )
-        for version, outcome in versions:
-            self.session.add(
-                KnowbotUnlistedVersion(
-                    source_ref=source_ref,
-                    version=version,
-                    owner_subject=owner_subject,
-                    outcome=outcome,
-                )
-            )
-        await self.session.flush()
 
     async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:
         rows = await self.session.execute(

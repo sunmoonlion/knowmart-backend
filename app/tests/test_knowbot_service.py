@@ -161,33 +161,27 @@ async def test_knowlab_experts_are_stopped_only_by_knowlab() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unlisted_outcomes_are_replaced_whole_and_checked() -> None:
+async def test_unlisted_outcomes_are_written_per_version_and_checked() -> None:
+    """按版本逐条写：各版本互不覆盖，先后乱序、重发都收敛（Astra 评审 F08）。"""
     svc, repo = service()
-    await svc.set_unlisted(
-        owner_subject=OWNER,
-        knowbot_ref="knowlab-r1",
-        versions=[
-            {"version": "1", "outcome": "declined"},
-            {"version": "2", "outcome": "rejected"},
-        ],
-    )
-    await svc.set_unlisted(
-        owner_subject=OWNER,
-        knowbot_ref="knowlab-r1",
-        versions=[{"version": "2", "outcome": "rejected"}],
-    )
-    assert await repo.unlisted_of("knowlab-r1", OWNER) == {"2": "rejected"}
-    for bad in (
-        [{"version": "0", "outcome": "declined"}],
-        [{"version": "1", "outcome": "stopped"}],
-        [
-            {"version": "1", "outcome": "declined"},
-            {"version": "1", "outcome": "rejected"},
-        ],
-    ):
+    for version, outcome in (("2", "rejected"), ("1", "declined"), ("2", "rejected")):
+        await svc.set_unlisted(
+            owner_subject=OWNER,
+            knowbot_ref="knowlab-r1",
+            version=version,
+            outcome=outcome,
+        )
+    assert await repo.unlisted_of("knowlab-r1", OWNER) == {
+        "1": "declined",
+        "2": "rejected",
+    }
+    for version, outcome in (("0", "declined"), ("1", "stopped")):
         with pytest.raises(BadRequestError):
             await svc.set_unlisted(
-                owner_subject=OWNER, knowbot_ref="knowlab-r1", versions=bad
+                owner_subject=OWNER,
+                knowbot_ref="knowlab-r1",
+                version=version,
+                outcome=outcome,
             )
     await svc.deliver(
         delivery_id="knowlab-expert-3",
@@ -197,7 +191,10 @@ async def test_unlisted_outcomes_are_replaced_whole_and_checked() -> None:
     )
     with pytest.raises(ConcurrencyConflictError):  # 已交付过：只认那个主人
         await svc.set_unlisted(
-            owner_subject=OTHER, knowbot_ref="knowlab-r1", versions=[]
+            owner_subject=OTHER,
+            knowbot_ref="knowlab-r1",
+            version="1",
+            outcome="declined",
         )
 
 

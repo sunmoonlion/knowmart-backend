@@ -248,7 +248,8 @@ async def test_the_detail_writes_what_became_of_versions_never_listed() -> None:
     await KnowbotService(repo).set_unlisted(
         owner_subject=ME,
         knowbot_ref="knowlab-r1",
-        versions=[{"version": "1", "outcome": "declined"}],
+        version="1",
+        outcome="declined",
     )
     mine = await catalog(repo).detail(ME, str(bot))
     assert mine["unlisted"] == [

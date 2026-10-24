@@ -186,7 +186,7 @@ class KnowbotVersion(Base):
 class KnowbotUnlistedVersion(Base):
     """knowlab 测试通过、没上架的那几版的结局（SDD 0037 第三节）：详情页写明空号那一版。
 
-    knowlab 整份替换；只记结局（用户不要 / 运营审核没过），理由在 knowlab。
+    knowlab 按版本逐条交来；只记结局（用户不要 / 运营审核没过），理由在 knowlab。
     """
 
     __tablename__ = "knowbot_unlisted_version"

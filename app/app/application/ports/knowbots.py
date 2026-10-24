@@ -111,14 +111,10 @@ class KnowbotRepository(Protocol):
         """这个 knowlab 引用对应的分身归谁；还没交付过的回 None。"""
         ...
 
-    async def replace_unlisted(
-        self,
-        *,
-        owner_subject: str,
-        source_ref: str,
-        versions: Sequence[tuple[str, str]],
+    async def put_unlisted(
+        self, *, owner_subject: str, source_ref: str, version: str, outcome: str
     ) -> None:
-        """整份替换这个引用没上架那几版的结局：（版本号，declined | rejected）。"""
+        """记下这个引用没上架的那一版的结局（declined | rejected）；有了就照新的写。"""
         ...
 
     async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:

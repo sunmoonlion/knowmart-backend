@@ -148,12 +148,10 @@ async def test_knowlab_sends_what_became_of_unlisted_versions(wired) -> None:
     _, repo = wired
     url = f"/api/internal/v1/knowmart/owners/{OWNER}/sources/knowlab-r1/unlisted"
     async with client() as c:
-        ok = await c.put(
-            url, json={"versions": [{"version": "1", "outcome": "rejected"}]}
-        )
+        ok = await c.put(url + "/1", json={"outcome": "rejected"})
         assert ok.status_code == 204
         assert await repo.unlisted_of("knowlab-r1", OWNER) == {"1": "rejected"}
-        bad = await c.put(url, json={"versions": [{"version": "1", "outcome": "x"}]})
+        bad = await c.put(url + "/1", json={"outcome": "x"})
         assert bad.status_code == 400
 
 
@@ -216,8 +214,8 @@ async def test_internal_routes_require_their_own_relation() -> None:
         )
         assert no_token.status_code == 401
         no_token = await c.put(
-            "/api/internal/v1/knowmart/owners/u/sources/x/unlisted",
-            json={"versions": []},
+            "/api/internal/v1/knowmart/owners/u/sources/x/unlisted/1",
+            json={"outcome": "declined"},
         )
         assert no_token.status_code == 401
     # 公网地址来的：当没有这个接口，连令牌都不看

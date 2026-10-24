@@ -271,22 +271,21 @@ async def test_experts_from_before_0006_become_uncategorized(db) -> None:
 
 @pytest.mark.asyncio
 async def test_unlisted_outcomes_on_the_real_database(db) -> None:
-    """SDD 0037 第三节：没上架那几版的结局整份替换、只认主人，结局只有两种（库挡）。"""
+    """SDD 0037 第三节：没上架那几版的结局按版本逐条写（重发照新的写）、只认主人，
+    结局只有两种（库挡）。"""
     async with db() as session:
         svc = KnowbotService(SqlKnowbotRepository(session))
-        await svc.set_unlisted(
-            owner_subject=OWNER,
-            knowbot_ref="knowlab-r1",
-            versions=[{"version": "1", "outcome": "declined"}],
-        )
-        await svc.set_unlisted(
-            owner_subject=OWNER,
-            knowbot_ref="knowlab-r1",
-            versions=[
-                {"version": "1", "outcome": "rejected"},
-                {"version": "2", "outcome": "declined"},
-            ],
-        )
+        for version, outcome in (
+            ("1", "declined"),
+            ("1", "rejected"),
+            ("2", "declined"),
+        ):
+            await svc.set_unlisted(
+                owner_subject=OWNER,
+                knowbot_ref="knowlab-r1",
+                version=version,
+                outcome=outcome,
+            )
     async with db() as session:
         repo = SqlKnowbotRepository(session)
         assert await repo.unlisted_of("knowlab-r1", OWNER) == {

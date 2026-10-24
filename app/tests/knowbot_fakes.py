@@ -197,16 +197,10 @@ class MemoryKnowbots:
                 return str(bot["owner_subject"])
         return None
 
-    async def replace_unlisted(
-        self,
-        *,
-        owner_subject: str,
-        source_ref: str,
-        versions: Sequence[tuple[str, str]],
+    async def put_unlisted(
+        self, *, owner_subject: str, source_ref: str, version: str, outcome: str
     ) -> None:
-        self.unlisted = {k: v for k, v in self.unlisted.items() if k[0] != source_ref}
-        for version, outcome in versions:
-            self.unlisted[(source_ref, version)] = (owner_subject, outcome)
+        self.unlisted[(source_ref, version)] = (owner_subject, outcome)
 
     async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:
         return {

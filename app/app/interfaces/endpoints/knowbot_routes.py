@@ -145,11 +145,12 @@ async def stop_delivered_version(
 
 
 class UnlistedIn(Strict):
-    versions: list[dict[str, Any]] = Field(max_length=200)
+    outcome: str = Field(min_length=1, max_length=16)
 
 
 @internal_router.put(
-    "/owners/{owner_subject}/sources/{knowbot_ref}/unlisted", status_code=204
+    "/owners/{owner_subject}/sources/{knowbot_ref}/unlisted/{version}",
+    status_code=204,
 )
 async def set_unlisted(
     _: Annotated[ServiceCaller, Depends(require_deliver_service)],
@@ -157,13 +158,18 @@ async def set_unlisted(
     svc: Service,
     owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
     knowbot_ref: Annotated[str, Path(min_length=1, max_length=128)],
+    version: Annotated[str, Path(min_length=1, max_length=16)],
 ) -> Response:
-    """knowlab 交来这个创意没上架那几版的结局（用户不要 / 审核没过，SDD 0037 第三节）。
+    """knowlab 交来这个创意没上架那一版的结局（用户不要 / 审核没过，SDD 0037 第三节）。
 
-    整份替换，重发安全；服务关系同交付。详情页拿它写明空号那一版。
+    按版本逐条写，结局是终态，重发、乱序都安全（Astra 评审 F08）；服务关系同交付。
+    详情页拿它写明空号那一版。
     """
     await svc.set_unlisted(
-        owner_subject=owner_subject, knowbot_ref=knowbot_ref, versions=body.versions
+        owner_subject=owner_subject,
+        knowbot_ref=knowbot_ref,
+        version=version,
+        outcome=body.outcome,
     )
     return Response(status_code=204, headers=NO_STORE)
 
