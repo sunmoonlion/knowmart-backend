@@ -41,7 +41,10 @@ def market_service(session: AsyncSession) -> MarketService:
         else None
     )
     return MarketService(
-        SqlMarketRepository(session), SqlKnowbotRepository(session), vault
+        SqlMarketRepository(session),
+        SqlKnowbotRepository(session),
+        vault,
+        id_hash_key=get_settings().publisher_id_hash_key,
     )
 
 

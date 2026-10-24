@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 from datetime import date
 from decimal import Decimal
@@ -103,8 +104,10 @@ def mask_id(number: str) -> str:
     return number[:3] + "*" * (len(number) - 7) + number[-4:]
 
 
-def hash_id(number: str) -> str:
-    return hashlib.sha256(number.upper().encode()).hexdigest()
+def hash_id(number: str, key: str) -> str:
+    """身份证号的查重摘要：带服务端钥匙的 HMAC。身份证号熵低，裸 sha256 库泄后可穷举还原
+    （Kimi 评审第 5 条）；钥匙不进库，换钥匙要整表重算。"""
+    return hmac.new(key.encode(), number.upper().encode(), hashlib.sha256).hexdigest()
 
 
 class LicenseIn(Strict):

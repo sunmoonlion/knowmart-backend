@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -13,6 +14,7 @@ from pydantic import ValidationError as PydanticValidationError
 from sqlalchemy import text
 
 from app.application.errors.exceptions import (
+    AppException,
     BadRequestError,
     ConcurrencyConflictError,
     NotFoundError,
@@ -34,6 +36,7 @@ from app.domain.market import (
     ResponseIn,
     ReviewDecision,
     ReviewIn,
+    hash_id,
 )
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
 from app.infrastructure.repositories.market import SqlMarketRepository
@@ -100,12 +103,14 @@ class World:
         self.db = db
         self.vault = vault
         self.now = NOW
+        self.id_hash_key = "test-only-id-hash-key"
 
     def svc(self, session) -> MarketService:  # type: ignore[no-untyped-def]
         return MarketService(
             SqlMarketRepository(session),
             SqlKnowbotRepository(session),
             self.vault,
+            id_hash_key=self.id_hash_key,
             now=lambda: self.now,
         )
 
@@ -819,6 +824,35 @@ async def test_house_rules_have_versions(world: World) -> None:
         assert (await svc.rules())["version"] == 1
 
     await world.run(flow)
+
+
+async def test_id_numbers_are_kept_as_a_keyed_digest(world: World, db) -> None:  # noqa: F811
+    """身份证号只存遮罩与带钥匙的摘要（Kimi 评审第 5 条）；没配钥匙个人入驻不了。"""
+    await approved_publisher(world)
+    async with db() as session:
+        stored = (
+            await session.execute(
+                text("select id_number_hash from publisher where kind = 'individual'")
+            )
+        ).scalar_one()
+    assert stored == hash_id("11010519491231002X", world.id_hash_key)
+    assert stored != hashlib.sha256(b"11010519491231002X").hexdigest()
+    world.id_hash_key = ""
+
+    async def unconfigured(svc: MarketService, admin: MarketAdmin) -> None:
+        await svc.save_publisher(
+            OTHER,
+            PublisherIn(
+                kind="individual",
+                name="李四",
+                real_name="李四",
+                id_number="11010519491231002X",
+            ),
+        )
+
+    with pytest.raises(AppException) as refused:
+        await world.run(unconfigured)
+    assert refused.value.code == "publisher_unconfigured"
 
 
 def test_id_numbers_are_checked() -> None:

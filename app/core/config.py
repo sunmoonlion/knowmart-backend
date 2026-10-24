@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     # 专家目录的公开开关（SDD 0032）：关着时每个用户只看得到自己的专家；开了也还要发布主体
     # 在专家的类目上有审核通过、未过期的资质。拿到资格或有持证合作方之前一直关着。
     public_market_enabled: bool = False
+    # 发布主体身份证号查重摘要的钥匙（HMAC，SOPS 私密配置）；没配时个人入驻回 503
+    publisher_id_hash_key: str = ""
 
     database_url: str = "postgresql+asyncpg://knowmart:knowmart@localhost:5432/knowmart"
     migration_database_url: str | None = None

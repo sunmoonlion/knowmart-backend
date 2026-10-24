@@ -128,11 +128,13 @@ class MarketService:
         knowbots: KnowbotRepository,
         vault: KnowledgeVault | None,
         *,
+        id_hash_key: str = "",
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.repo = repo
         self.knowbots = knowbots
         self.vault = vault
+        self.id_hash_key = id_hash_key
         self.now = now
 
     # ================= 发布主体与资质 =================
@@ -164,7 +166,13 @@ class MarketService:
         }
         if body.kind == "individual":
             assert body.real_name and body.id_number
-            digest = hash_id(body.id_number)
+            if not self.id_hash_key:
+                raise AppException(
+                    code="publisher_unconfigured",
+                    status_code=503,
+                    msg="publisher_unconfigured",
+                )
+            digest = hash_id(body.id_number, self.id_hash_key)
             if await self.repo.publisher_with_id_hash(digest, other_than=subject):
                 raise _conflict(
                     "This id number is already used by another account",
