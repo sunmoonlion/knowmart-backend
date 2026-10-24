@@ -84,6 +84,29 @@ def needs_license(category: str) -> bool:
     return bool(found and found.license)
 
 
+async def still_qualified(
+    repo: MarketRepository,
+    publisher_id: uuid.UUID | str | None,
+    category: str,
+    today: date,
+) -> bool:
+    """按登记的发布主体现核资格：主体实名审过，类目要证照的还有审过、没过期的证照。
+
+    运营批准、买的那一刻都核（Astra 评审 F06）：提交后主体改了资料（要重审、不算
+    实名）、证照到期还没等到每天扫表，都不算。
+    """
+    publisher = await repo.get_publisher(str(publisher_id)) if publisher_id else None
+    if (
+        publisher is None
+        or publisher["review_status"] != "approved"
+        or not publisher["real_name_verified"]
+    ):
+        return False
+    return not needs_license(category) or await repo.has_valid_license(
+        publisher["id"], category, today
+    )
+
+
 def check_category(category: str) -> None:
     if category not in BY_CODE or category == DEFAULT_CATEGORY:
         raise BadRequestError("Choose a category", code="category_invalid")
@@ -423,7 +446,11 @@ class MarketService:
         self, *, q: str | None, category: str | None, page: int
     ) -> Row:
         found, total = await self.repo.listed_knowledge(
-            q=q, category=category, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE
+            q=q,
+            category=category,
+            limit=PAGE_SIZE,
+            offset=(page - 1) * PAGE_SIZE,
+            today=self.now().date(),
         )
         return {
             "items": [listing_view(item, viewer=None) for item in found],
@@ -458,6 +485,10 @@ class MarketService:
             raise _missing()
         if listing["seller_subject"] == subject:
             raise BadRequestError("This is your own listing", code="own_listing")
+        if not await still_qualified(
+            self.repo, listing["publisher_id"], listing["category"], self.now().date()
+        ):
+            raise _conflict("This listing cannot be bought now", "listing_unavailable")
         demand_id = await self._chosen_demand(
             subject, body.demand_id, "knowledge", listing_id
         )
@@ -975,6 +1006,13 @@ class MarketAdmin:
         found = await self.repo.get_listing(listing_id)
         if found is None or found["status"] != "pending":
             raise _missing()
+        if decision.approve and not await still_qualified(
+            self.repo, found["publisher_id"], found["category"], self.now().date()
+        ):
+            raise _conflict(
+                "The seller is not qualified for this category now",
+                "publisher_not_qualified",
+            )
         async with self.repo.transaction():
             await self.repo.update_listing(
                 found["id"],
@@ -990,6 +1028,13 @@ class MarketAdmin:
         found = await self.repo.get_knowbot(knowbot_id)
         if found is None or found["listing_status"] != "pending":
             raise _missing("knowbot")
+        if decision.approve and not await still_qualified(
+            self.repo, found["publisher_id"], found["category"], self.now().date()
+        ):
+            raise _conflict(
+                "The publisher is not qualified for this category now",
+                "publisher_not_qualified",
+            )
         changes: Row = {
             "listing_status": "public" if decision.approve else "rejected",
             "listing_review_note": decision.note or None,

@@ -400,6 +400,137 @@ async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) 
     await world.run(buy)
 
 
+async def _edit_publisher(world: World) -> None:
+    """卖家改了主体资料：回到待审、不算实名。"""
+
+    async def work(svc: MarketService, admin: MarketAdmin) -> None:
+        await svc.save_publisher(
+            SELLER,
+            PublisherIn(
+                kind="individual",
+                name="张三工作室（改名）",
+                real_name="张三",
+                id_number="11010519491231002X",
+            ),
+        )
+
+    await world.run(work)
+
+
+async def _reapprove(world: World, publisher_id: str) -> None:
+    async def work(svc: MarketService, admin: MarketAdmin) -> None:
+        await admin.decide_publisher(publisher_id, ReviewDecision(approve=True), OPS)
+
+    await world.run(work)
+
+
+async def test_knowledge_needs_a_qualified_seller_when_approved_and_bought(
+    world: World,
+) -> None:
+    """资格不只在提交时核：运营批准、市场列出、买的那一刻都现核（Astra 评审 F06）。"""
+    publisher_id = await approved_publisher(world)
+
+    async def submit(svc: MarketService, admin: MarketAdmin) -> str:
+        made = await svc.create_listing(SELLER, knowledge(), token)
+        await svc.submit_listing(SELLER, made["listing_id"])
+        return made["listing_id"]
+
+    listing_id = await world.run(submit)
+    await _edit_publisher(world)
+
+    async def approve(svc: MarketService, admin: MarketAdmin) -> None:
+        await admin.decide_listing(listing_id, ReviewDecision(approve=True), OPS)
+
+    with pytest.raises(ConcurrencyConflictError) as refused:
+        await world.run(approve)
+    assert refused.value.code == "publisher_not_qualified"
+    await _reapprove(world, publisher_id)
+    await world.run(approve)
+    await _edit_publisher(world)
+
+    async def unqualified(svc: MarketService, admin: MarketAdmin) -> None:
+        market = await svc.knowledge_market(q=None, category=None, page=1)
+        assert market["items"] == [] and market["total"] == 0
+        with pytest.raises(ConcurrencyConflictError) as refused:
+            await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+        assert refused.value.code == "listing_unavailable"
+        assert world.vault.purchases == []
+
+    await world.run(unqualified)
+    await _reapprove(world, publisher_id)
+
+    async def again(svc: MarketService, admin: MarketAdmin) -> None:
+        market = await svc.knowledge_market(q=None, category=None, page=1)
+        assert [i["listing_id"] for i in market["items"]] == [listing_id]
+        await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+
+    await world.run(again)
+
+
+async def test_a_licensed_expert_still_needs_an_approved_publisher(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    """有证照的类目也要主体审过；证照过期不等每天扫表就请不了（Astra 评审 F06）。"""
+    bot = (await deliver(db, "delivery-0301", manifest(), ref="lab-bot-3")).knowbot_id
+    async with db() as session:
+        await session.execute(
+            text("update knowbot set category = :c where id = :i"),
+            {"c": "finance.securities_advisory", "i": bot},
+        )
+        await session.commit()
+    publisher_id = await approved_publisher(world)
+
+    async def go_public(svc: MarketService, admin: MarketAdmin) -> None:
+        doc = await svc.add_document(SELLER, "license", "application/pdf", b"%PDF-1")
+        lic = await svc.add_license(
+            SELLER,
+            LicenseIn(
+                category="finance.securities_advisory",
+                license_name="许可证",
+                license_no="9",
+                valid_until=date(2026, 12, 31),
+                document_id=doc["document_id"],
+            ),
+        )
+        await admin.decide_license(lic["license_id"], ReviewDecision(approve=True), OPS)
+        await svc.set_expert_listing(
+            SELLER, str(bot), ExpertListingIn(visibility="public")
+        )
+
+    await world.run(go_public)
+    await _edit_publisher(world)
+
+    async def approve(svc: MarketService, admin: MarketAdmin) -> None:
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+
+    with pytest.raises(ConcurrencyConflictError) as refused:
+        await world.run(approve)
+    assert refused.value.code == "publisher_not_qualified"
+    await _reapprove(world, publisher_id)
+    await world.run(approve)
+
+    async def summon(at: datetime) -> None:
+        async with db() as session:
+            await KnowbotService(
+                SqlKnowbotRepository(session), public_market=True, now=lambda: at
+            ).summon(
+                owner_subject=BUYER,
+                knowbot_id=str(bot),
+                version="1",
+                runtime="knowbench",
+            )
+
+    await summon(NOW)
+    await _edit_publisher(world)
+    with pytest.raises(NotFoundError):
+        await summon(NOW)
+    await _reapprove(world, publisher_id)
+    await summon(NOW)
+    with pytest.raises(NotFoundError):  # 证照过期，扫表还没跑
+        await summon(datetime(2027, 1, 2, tzinfo=UTC))
+
+
 async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:
     await approved_publisher(world)
 

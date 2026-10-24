@@ -61,8 +61,17 @@ class MarketRepository(Protocol):
     async def update_listing(self, listing_id: uuid.UUID, **fields: Any) -> None: ...
     async def listings_of(self, subject: str) -> list[Row]: ...
     async def listed_knowledge(
-        self, *, q: str | None, category: str | None, limit: int, offset: int
-    ) -> tuple[list[Row], int]: ...
+        self,
+        *,
+        q: str | None,
+        category: str | None,
+        limit: int,
+        offset: int,
+        today: date,
+    ) -> tuple[list[Row], int]:
+        """上架了、卖家现在仍有资格的知识条目（一页，与总数）。"""
+        ...
+
     async def pending_listings(self) -> list[Row]: ...
     async def listed_by_publisher(
         self, publisher_id: uuid.UUID, category: str

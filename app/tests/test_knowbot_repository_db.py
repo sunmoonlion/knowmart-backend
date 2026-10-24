@@ -158,8 +158,9 @@ async def test_catalog_visibility_in_sql(db) -> None:
         publisher = uuid.uuid4()
         await session.execute(
             text(
-                "insert into publisher (id, kind, name, real_name_verified) "
-                "values (:i, 'organization', '某某证券', true)"
+                "insert into publisher (id, kind, name, real_name_verified,"
+                " review_status) values (:i, 'organization', '某某证券', true,"
+                " 'approved')"
             ),
             {"i": publisher},
         )
@@ -217,6 +218,21 @@ async def test_catalog_visibility_in_sql(db) -> None:
             )
             is None
         )
+        # 有证照也要主体审过：改了资料回到待审，就不公开、请不了（Astra 评审 F06）
+        await session.execute(
+            text("update publisher set review_status = 'pending' where id = :i"),
+            {"i": publisher},
+        )
+        assert (
+            await repo.licensed_publisher(
+                publisher, "finance.securities_advisory", today=date(2026, 10, 18)
+            )
+            is None
+        )
+        hidden = await repo.list_visible(
+            OWNER, public_market=True, today=date(2026, 10, 18)
+        )
+        assert [b.id for b in hidden] == [mine.knowbot_id]
 
 
 def _step(name: str, direction: str):

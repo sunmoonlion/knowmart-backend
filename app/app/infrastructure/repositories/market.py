@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.domain.knowbots.catalog import CATEGORIES
 from app.infrastructure.models.knowbots import Knowbot, Publisher, PublisherLicense
 from app.infrastructure.models.market import (
     Demand,
@@ -27,6 +28,9 @@ from app.infrastructure.models.market import (
     Trade,
     TradeReview,
 )
+
+# 要证照的类目
+LICENSED = tuple(c.code for c in CATEGORIES if c.license)
 
 
 def _row(obj: Any, *, skip: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -321,9 +325,40 @@ class SqlMarketRepository:
         return [_row(r) for r in rows]
 
     async def listed_knowledge(
-        self, *, q: str | None, category: str | None, limit: int, offset: int
+        self,
+        *,
+        q: str | None,
+        category: str | None,
+        limit: int,
+        offset: int,
+        today: date,
     ) -> tuple[list[dict[str, Any]], int]:
-        where = [KnowledgeListing.status == "listed"]
+        # 上架了，且卖家现在仍有资格：主体实名审过，类目要证照的还有有效证照
+        # （Astra 评审 F06：不等每天扫表，失去资格的当下就不在市场上）
+        where = [
+            KnowledgeListing.status == "listed",
+            select(Publisher.id)
+            .where(
+                Publisher.id == KnowledgeListing.publisher_id,
+                Publisher.review_status == "approved",
+                Publisher.real_name_verified.is_(True),
+            )
+            .exists(),
+            or_(
+                KnowledgeListing.category.not_in(LICENSED),
+                select(PublisherLicense.id)
+                .where(
+                    PublisherLicense.publisher_id == KnowledgeListing.publisher_id,
+                    PublisherLicense.category == KnowledgeListing.category,
+                    PublisherLicense.review_status == "approved",
+                    or_(
+                        PublisherLicense.valid_until.is_(None),
+                        PublisherLicense.valid_until >= today,
+                    ),
+                )
+                .exists(),
+            ),
+        ]
         if q:
             like = f"%{q}%"
             where.append(

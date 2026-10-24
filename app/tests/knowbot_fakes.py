@@ -16,6 +16,8 @@ from app.application.ports.knowbots import (
     PublisherRecord,
     VersionStatus,
 )
+from app.application.services.market import needs_license
+from app.domain.knowbots.catalog import DEFAULT_CATEGORY
 
 
 def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
@@ -156,6 +158,22 @@ class MemoryKnowbots:
             and (lic.get("valid_until") is None or lic["valid_until"] >= today)
         ]
 
+    def _qualified(
+        self, publisher_id: uuid.UUID | None, category: str, today: date
+    ) -> bool:
+        """同 SQL：主体实名审过；类目要证照的还要有效证照（Astra 评审 F06）。"""
+        publisher = self.publishers.get(publisher_id) if publisher_id else None
+        if publisher is None or category == DEFAULT_CATEGORY:
+            return False
+        if (
+            publisher.get("review_status", "approved") != "approved"
+            or not publisher["real_name_verified"]
+        ):
+            return False
+        return not needs_license(category) or bool(
+            self._valid_licenses(publisher_id, category, today)
+        )
+
     async def list_visible(
         self, owner_subject: str, *, public_market: bool, today: date
     ) -> Sequence[KnowbotRecord]:
@@ -165,12 +183,8 @@ class MemoryKnowbots:
             public = (
                 public_market
                 and bot.get("visibility") == "public"
-                and bool(
-                    self._valid_licenses(
-                        bot.get("publisher_id"),
-                        bot.get("category", "uncategorized"),
-                        today,
-                    )
+                and self._qualified(
+                    bot.get("publisher_id"), bot.get("category", "uncategorized"), today
                 )
             )
             if mine or public:
@@ -206,7 +220,7 @@ class MemoryKnowbots:
     ) -> PublisherRecord | None:
         publisher = self.publishers.get(publisher_id)
         licenses = self._valid_licenses(publisher_id, category, today)
-        if publisher is None or not licenses:
+        if publisher is None or not self._qualified(publisher_id, category, today):
             return None
         return PublisherRecord(
             licenses=tuple(
@@ -219,7 +233,7 @@ class MemoryKnowbots:
                 }
                 for lic in licenses
             ),
-            **publisher,
+            **{k: v for k, v in publisher.items() if k != "review_status"},
         )
 
     async def set_version_status(
