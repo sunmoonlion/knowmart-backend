@@ -229,11 +229,15 @@ class KnowbotService:
 
         knowlab 交来的专家，一生（含停用）记在 knowlab（SDD 0037 第六节），只认
         knowlab 来停；用户在这里点的回 409 `stop_in_knowlab`，页面带他去 knowlab，
-        免得两边对不上。
+        免得两边对不上。knowlab 来停的也只能停 knowlab 交来的，别的当没有（Kimi 评审
+        第 1 条）。
         """
         async with self.repo.transaction():
             bot = await self._owned(owner_subject, knowbot_id)
-            if not by_knowlab and bot.source_ref.startswith(KNOWLAB_REF):
+            from_knowlab = bot.source_ref.startswith(KNOWLAB_REF)
+            if by_knowlab and not from_knowlab:
+                raise _not_found()
+            if not by_knowlab and from_knowlab:
                 raise ConcurrencyConflictError(
                     "Stop this version in knowlab", code="stop_in_knowlab"
                 )
@@ -254,6 +258,10 @@ class KnowbotService:
         """
         _require(OWNER, owner_subject, "owner_subject")
         _require(SOURCE_REF, knowbot_ref, "knowbot_ref")
+        if not knowbot_ref.startswith(KNOWLAB_REF):
+            raise BadRequestError(
+                "Only knowlab sends unlisted outcomes", code="unlisted_invalid"
+            )
         if not VERSION.fullmatch(version or "") or outcome not in OUTCOMES:
             raise BadRequestError(
                 "A version or outcome is invalid", code="unlisted_invalid"

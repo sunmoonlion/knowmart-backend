@@ -130,7 +130,13 @@ async def test_delivery_may_ask_to_go_public(wired) -> None:
 @pytest.mark.asyncio
 async def test_knowlab_stops_a_version_of_its_owner(wired) -> None:
     async with client() as c:
-        knowbot = (await _deliver(c, "delivery-0001")).json()["knowbot_id"]
+        native = (await _deliver(c, "delivery-0002")).json()["knowbot_id"]
+        knowbot = (await _deliver(c, "delivery-0001", ref="knowlab-r1")).json()[
+            "knowbot_id"
+        ]
+        # 不是 knowlab 交来的：knowlab 停不了（Kimi 评审第 1 条）
+        url = f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{native}"
+        assert (await c.post(url + "/versions/1/stop")).status_code == 404
         base = f"/api/internal/v1/knowmart/owners/{{owner}}/knowbots/{knowbot}"
         others = await c.post(base.format(owner="someone-else") + "/versions/1/stop")
         assert others.status_code == 404

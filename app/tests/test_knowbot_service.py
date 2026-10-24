@@ -161,6 +161,24 @@ async def test_knowlab_experts_are_stopped_only_by_knowlab() -> None:
 
 
 @pytest.mark.asyncio
+async def test_knowlab_cannot_stop_or_mark_what_it_did_not_deliver() -> None:
+    """knowlab 的服务关系只管 knowlab 交来的：别的分身当没有（Kimi 评审第 1 条）。"""
+    svc, _ = service()
+    result = await deliver(svc, "delivery-0001", manifest())  # 不是 knowlab 交来的
+    with pytest.raises(NotFoundError):
+        await svc.stop(
+            owner_subject=OWNER,
+            knowbot_id=str(result.knowbot_id),
+            version="1",
+            by_knowlab=True,
+        )
+    with pytest.raises(BadRequestError):
+        await svc.set_unlisted(
+            owner_subject=OWNER, knowbot_ref="other-r1", version="1", outcome="declined"
+        )
+
+
+@pytest.mark.asyncio
 async def test_unlisted_outcomes_are_written_per_version_and_checked() -> None:
     """按版本逐条写：各版本互不覆盖，先后乱序、重发都收敛（Astra 评审 F08）。"""
     svc, repo = service()
