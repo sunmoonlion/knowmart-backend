@@ -128,6 +128,13 @@ class Trade(Base):
     demand_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("demand.id", ondelete="SET NULL")
     )
+    # 买知识：复制中 / 成交；这次操作的幂等键与参数摘要；要复制的几份（Astra 评审 F07）
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="done")
+    request_key: Mapped[str | None] = mapped_column(String(64))
+    request_digest: Mapped[str | None] = mapped_column(String(64))
+    planned: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     created_at: Mapped[datetime] = _now()
 
 

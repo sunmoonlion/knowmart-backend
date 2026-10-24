@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -15,6 +16,7 @@ from app.application.errors.exceptions import (
     BadRequestError,
     ConcurrencyConflictError,
     NotFoundError,
+    ServiceUnavailableError,
 )
 from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketAdmin, MarketService
@@ -65,6 +67,8 @@ class Vault:
             },
         }
         self.purchases: list[dict[str, Any]] = []
+        self.copies: dict[str, str] = {}  # 成交编号 → 复制出来的那份
+        self.fail_on: list[str] = []  # 复制这几份时依次失败一次
 
     async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
         if item_id not in self.items:
@@ -72,10 +76,16 @@ class Vault:
         return self.items[item_id]
 
     async def purchase(self, **kw: Any) -> dict[str, Any]:
-        self.purchases.append(kw)
+        """同 knowbase：按成交编号幂等，同一个编号重发回已复制的那份。"""
+        if kw["seller_item_id"] in self.fail_on:
+            self.fail_on.remove(kw["seller_item_id"])
+            raise ServiceUnavailableError("knowbase down", code="knowbase_unavailable")
         source = self.items[kw["seller_item_id"]]
+        if kw["transaction_ref"] not in self.copies:
+            self.purchases.append(kw)
+            self.copies[kw["transaction_ref"]] = f"copy-{len(self.purchases)}"
         return {
-            "item_id": f"copy-{len(self.purchases)}",
+            "item_id": self.copies[kw["transaction_ref"]],
             "name": source["name"],
             "sha256": source["sha256"],
         }
@@ -371,8 +381,12 @@ async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) 
 
     async def buy(svc: MarketService, admin: MarketAdmin):
         with pytest.raises(BadRequestError):
-            await svc.buy(SELLER, listing_id, BuyIn(target_app="knowbench"))
-        trade = await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+            await svc.buy(
+                SELLER, listing_id, BuyIn(request_id="buy-0001", target_app="knowbench")
+            )
+        trade = await svc.buy(
+            BUYER, listing_id, BuyIn(request_id="buy-0002", target_app="knowbench")
+        )
         assert (trade["kind"], trade["price"], trade["target_app"]) == (
             "knowledge",
             "50.00",
@@ -452,7 +466,9 @@ async def test_knowledge_needs_a_qualified_seller_when_approved_and_bought(
         market = await svc.knowledge_market(q=None, category=None, page=1)
         assert market["items"] == [] and market["total"] == 0
         with pytest.raises(ConcurrencyConflictError) as refused:
-            await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+            await svc.buy(
+                BUYER, listing_id, BuyIn(request_id="buy-0003", target_app="knowbench")
+            )
         assert refused.value.code == "listing_unavailable"
         assert world.vault.purchases == []
 
@@ -462,7 +478,9 @@ async def test_knowledge_needs_a_qualified_seller_when_approved_and_bought(
     async def again(svc: MarketService, admin: MarketAdmin) -> None:
         market = await svc.knowledge_market(q=None, category=None, page=1)
         assert [i["listing_id"] for i in market["items"]] == [listing_id]
-        await svc.buy(BUYER, listing_id, BuyIn(target_app="knowbench"))
+        await svc.buy(
+            BUYER, listing_id, BuyIn(request_id="buy-0004", target_app="knowbench")
+        )
 
     await world.run(again)
 
@@ -529,6 +547,86 @@ async def test_a_licensed_expert_still_needs_an_approved_publisher(
     await summon(NOW)
     with pytest.raises(NotFoundError):  # 证照过期，扫表还没跑
         await summon(datetime(2027, 1, 2, tzinfo=UTC))
+
+
+async def test_buying_resumes_where_it_stopped(world: World) -> None:
+    """买知识可恢复（Astra 评审 F07）：第二份没复制成，重来接着做那一笔，副本不多出来；
+    同一个键换了参数拒；换了键同样参数接着做没复制完的；并发重来也只有一笔。"""
+    await approved_publisher(world)
+
+    async def listed(svc: MarketService, admin: MarketAdmin) -> str:
+        made = await svc.create_listing(
+            SELLER, knowledge(items=[{"item_id": "d1"}, {"item_id": "d2"}]), token
+        )
+        await svc.submit_listing(SELLER, made["listing_id"])
+        await admin.decide_listing(
+            made["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        return made["listing_id"]
+
+    listing_id = await world.run(listed)
+    body = BuyIn(request_id="retry-0001", target_app="knowlab")
+    world.vault.fail_on = ["d2"]
+
+    async def buy(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await svc.buy(BUYER, listing_id, body)
+
+    with pytest.raises(ServiceUnavailableError):
+        await world.run(buy)
+
+    async def halfway(svc: MarketService, admin: MarketAdmin) -> None:
+        assert await svc.my_trades(BUYER, "buyer") == []  # 没复制完不算成交
+        [trade] = await admin.trades(1)
+        assert trade["status"] == "copying" and len(trade["copied"]) == 1
+        # 复制到一半的也算买了：不许转卖照样挡
+        with pytest.raises(BadRequestError) as refused:
+            await svc.create_listing(BUYER, knowledge(), token)
+        assert refused.value.code == "resale_not_allowed"
+        with pytest.raises(ConcurrencyConflictError) as reused:
+            await svc.buy(
+                BUYER,
+                listing_id,
+                BuyIn(request_id="retry-0001", target_app="knowbench"),
+            )
+        assert reused.value.code == "request_reused"
+
+    await world.run(halfway)
+    done = await world.run(buy)
+    assert done["status"] == "done" and [c["item_id"] for c in done["copied"]] == [
+        "copy-1",
+        "copy-2",
+    ]
+    assert len(world.vault.purchases) == 2
+    again = await world.run(buy)  # 回执丢了再发：同一笔
+    assert again["trade_id"] == done["trade_id"]
+
+    # 换了键、同样参数：上一笔没复制完就接着做那一笔
+    world.vault.fail_on = ["d1"]
+    second = BuyIn(request_id="retry-0002", target_app="knowbench")
+
+    async def buy_second(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await svc.buy(BUYER, listing_id, second)
+
+    with pytest.raises(ServiceUnavailableError):
+        await world.run(buy_second)
+    second = BuyIn(request_id="retry-0003", target_app="knowbench")
+    resumed = await world.run(buy_second)
+    assert resumed["status"] == "done" and len(world.vault.purchases) == 4
+
+    # 并发重来：一笔
+    third = BuyIn(request_id="retry-0004", target_app="knowbench")
+
+    async def buy_third(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await svc.buy(BUYER, listing_id, third)
+
+    got = await asyncio.gather(world.run(buy_third), world.run(buy_third))
+    assert got[0]["trade_id"] == got[1]["trade_id"]
+    assert len(world.vault.purchases) == 6
+
+    async def tally(svc: MarketService, admin: MarketAdmin) -> None:
+        assert len(await svc.my_trades(BUYER, "buyer")) == 3
+
+    await world.run(tally)
 
 
 async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:
@@ -608,7 +706,11 @@ async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -
         trade = await svc.buy(
             BUYER,
             listing["listing_id"],
-            BuyIn(target_app="knowlab", demand_id=demand["demand_id"]),
+            BuyIn(
+                request_id="buy-0005",
+                target_app="knowlab",
+                demand_id=demand["demand_id"],
+            ),
         )
         assert trade["demand_id"] == demand["demand_id"]
         assert (await svc.demand(BUYER, demand["demand_id"]))["status"] == "closed"

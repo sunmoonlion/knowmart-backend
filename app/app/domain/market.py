@@ -205,9 +205,11 @@ class ReportIn(Strict):
 class BuyIn(Strict):
     """买知识：复制进买家哪个知识库（knowbench 云端或 knowlab）。
 
-    从需求响应来的带需求编号。
+    从需求响应来的带需求编号。request_id 是这一次购买的幂等键（网页每次打开买的那一处
+    生成一个，重试沿用）：同一个键重来接着做原来那一笔，参数不同就拒（Astra 评审 F07）。
     """
 
+    request_id: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")
     target_app: TargetApp
     demand_id: str | None = Field(default=None, min_length=36, max_length=36)
 

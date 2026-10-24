@@ -13,6 +13,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.knowbots.catalog import CATEGORIES
@@ -535,9 +536,66 @@ class SqlMarketRepository:
         await self.session.refresh(row)
         return _row(row)
 
-    async def get_trade(self, trade_id: str) -> dict[str, Any] | None:
+    async def start_trade(self, fields: dict[str, Any]) -> dict[str, Any]:
+        """落一笔带幂等键的成交；同一买家同一个键已经有了就回那一笔（并发也只有一笔）。"""
+        await self.session.execute(
+            pg_insert(Trade)
+            .values(id=uuid.uuid4(), **fields)
+            .on_conflict_do_nothing(
+                index_elements=[Trade.buyer_subject, Trade.request_key],
+                index_where=Trade.request_key.is_not(None),
+            )
+        )
+        found = await self.trade_by_request(
+            fields["buyer_subject"], fields["request_key"]
+        )
+        assert found is not None
+        return found
+
+    async def trade_by_request(
+        self, buyer: str, request_key: str
+    ) -> dict[str, Any] | None:
+        row = (
+            await self.session.execute(
+                select(Trade).where(
+                    Trade.buyer_subject == buyer, Trade.request_key == request_key
+                )
+            )
+        ).scalar_one_or_none()
+        return None if row is None else _row(row)
+
+    async def copying_trade(
+        self, buyer: str, request_digest: str
+    ) -> dict[str, Any] | None:
+        """这个买家同样参数、还没复制完的那一笔（换了幂等键重来时接着做）。"""
+        row = (
+            await self.session.execute(
+                select(Trade)
+                .where(
+                    Trade.buyer_subject == buyer,
+                    Trade.request_digest == request_digest,
+                    Trade.status == "copying",
+                )
+                .order_by(Trade.created_at)
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        return None if row is None else _row(row)
+
+    async def update_trade(self, trade_id: uuid.UUID, **fields: Any) -> None:
+        await self.session.execute(
+            update(Trade).where(Trade.id == trade_id).values(**fields)
+        )
+
+    async def get_trade(
+        self, trade_id: str | uuid.UUID, *, for_update: bool = False
+    ) -> dict[str, Any] | None:
         key = _id(trade_id)
-        row = await self.session.get(Trade, key) if key else None
+        if key is None:
+            return None
+        row = await self.session.get(
+            Trade, key, with_for_update=for_update, populate_existing=for_update
+        )
         return None if row is None else _row(row)
 
     async def trades(
@@ -547,8 +605,9 @@ class SqlMarketRepository:
         seller: str | None = None,
         limit: int = 200,
         offset: int = 0,
+        copying: bool = False,
     ) -> list[dict[str, Any]]:
-        where = []
+        where = [] if copying else [Trade.status == "done"]
         if buyer is not None:
             where.append(Trade.buyer_subject == buyer)
         if seller is not None:
@@ -568,7 +627,7 @@ class SqlMarketRepository:
         """这个人买来、不许转卖的知识的内容摘要（上架时不许拿它们再卖）。"""
         trades = (
             await self.session.execute(
-                select(Trade.listing_ref, Trade.copied).where(
+                select(Trade.listing_ref, Trade.planned).where(
                     Trade.buyer_subject == buyer, Trade.kind == "knowledge"
                 )
             )
@@ -587,11 +646,12 @@ class SqlMarketRepository:
                 )
             ).scalars()
         }
+        # 按要复制的几份算：复制到一半的也算买了（Astra 评审 F07）
         return {
             str(c.get("sha256"))
-            for ref, copied in trades
+            for ref, planned in trades
             if _id(ref) not in allowed
-            for c in copied or []
+            for c in planned or []
         }
 
     async def add_review(self, fields: dict[str, Any]) -> dict[str, Any]:

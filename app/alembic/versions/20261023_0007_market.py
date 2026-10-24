@@ -242,8 +242,15 @@ def upgrade() -> None:
             pg.UUID(as_uuid=True),
             sa.ForeignKey("demand.id", ondelete="SET NULL"),
         ),
+        # 买知识可恢复（Astra 评审 F07）：先落一笔「复制中」，记要复制的几份（planned）
+        # 与买家这次操作的幂等键；逐份复制、逐份记进 copied，都复制完才算成交（done）
+        sa.Column("status", sa.String(16), nullable=False, server_default="done"),
+        sa.Column("request_key", sa.String(64)),
+        sa.Column("request_digest", sa.String(64)),
+        sa.Column("planned", pg.JSONB(), nullable=False, server_default="[]"),
         _created(),
         sa.CheckConstraint("kind IN ('expert', 'knowledge')", name="ck_trade_kind"),
+        sa.CheckConstraint("status IN ('copying', 'done')", name="ck_trade_status"),
         sa.CheckConstraint(
             "target_app IS NULL OR target_app IN ('knowbench', 'knowlab')",
             name="ck_trade_target_app",
@@ -252,6 +259,13 @@ def upgrade() -> None:
     op.create_index("ix_trade_buyer", "trade", ["buyer_subject", "created_at"])
     op.create_index("ix_trade_seller", "trade", ["seller_subject", "created_at"])
     op.create_index("ix_trade_listing", "trade", ["listing_ref"])
+    op.create_index(
+        "uq_trade_request",
+        "trade",
+        ["buyer_subject", "request_key"],
+        unique=True,
+        postgresql_where=sa.text("request_key IS NOT NULL"),
+    )
     op.create_table(
         "trade_review",
         sa.Column(
@@ -324,6 +338,7 @@ def downgrade() -> None:
     op.drop_index("ix_market_message_thread", table_name="market_message")
     op.drop_table("market_message")
     op.drop_table("trade_review")
+    op.drop_index("uq_trade_request", table_name="trade")
     op.drop_index("ix_trade_listing", table_name="trade")
     op.drop_index("ix_trade_seller", table_name="trade")
     op.drop_index("ix_trade_buyer", table_name="trade")

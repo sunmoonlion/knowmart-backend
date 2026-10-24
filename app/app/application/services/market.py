@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
@@ -105,6 +106,14 @@ async def still_qualified(
     return not needs_license(category) or await repo.has_valid_license(
         publisher["id"], category, today
     )
+
+
+def _buy_digest(listing_id: str, body: BuyIn) -> str:
+    """一次购买的参数摘要：同一个幂等键只认同样的参数。"""
+    raw = json.dumps(
+        [str(listing_id), body.target_app, body.demand_id], separators=(",", ":")
+    )
+    return hashlib.sha256(raw.encode()).hexdigest()
 
 
 def check_category(category: str) -> None:
@@ -479,7 +488,30 @@ class MarketService:
         }
 
     async def buy(self, subject: str, listing_id: str, body: BuyIn) -> Row:
-        """买知识：复制一份进买家选的知识库（knowbench 云端或 knowlab），记一笔成交。"""
+        """买知识：复制一份进买家选的知识库（knowbench 云端或 knowlab），记一笔成交。
+
+        可恢复（Astra 评审 F07）：先落一笔「复制中」（要复制的几份、成交编号定下来），
+        逐份复制、逐份记下，都复制完才算成交。同一个 request_id 重来接着做那一笔；换了
+        键但同样参数、上一笔还没复制完的，也接着做那一笔；同一个键参数不同就拒。knowbase
+        按成交编号与序号幂等复制，重来不会多出副本。
+        """
+        digest = _buy_digest(listing_id, body)
+        trade = await self.repo.trade_by_request(
+            subject, body.request_id
+        ) or await self.repo.copying_trade(subject, digest)
+        if trade is None:
+            trade = await self._start_buying(subject, listing_id, body, digest)
+        if trade["request_digest"] != digest:
+            raise _conflict(
+                "This request id was used for another purchase", "request_reused"
+            )
+        if trade["status"] != "done":
+            trade = await self._copy(trade)
+        return trade_view(trade, viewer=subject)
+
+    async def _start_buying(
+        self, subject: str, listing_id: str, body: BuyIn, digest: str
+    ) -> Row:
         listing = await self.repo.get_listing(listing_id)
         if listing is None or listing["status"] != "listed":
             raise _missing()
@@ -492,34 +524,10 @@ class MarketService:
         demand_id = await self._chosen_demand(
             subject, body.demand_id, "knowledge", listing_id
         )
-        if self.vault is None:
-            raise AppException(
-                code="knowbase_unconfigured",
-                status_code=503,
-                msg="knowbase_unconfigured",
-            )
-        trade_id = uuid.uuid4()
-        copied = []
-        for n, item in enumerate(listing["items"]):
-            got = await self.vault.purchase(
-                seller=listing["seller_subject"],
-                seller_item_id=str(item["item_id"]),
-                buyer=subject,
-                buyer_app=body.target_app,
-                transaction_ref=f"knowmart-trade:{trade_id}:{n}",
-            )
-            copied.append(
-                {
-                    "seller_item_id": str(item["item_id"]),
-                    "item_id": str(got.get("item_id")),
-                    "name": str(got.get("name") or item.get("name")),
-                    "sha256": str(got.get("sha256") or item.get("sha256")),
-                }
-            )
+        self._need_vault()
         async with self.repo.transaction():
-            trade = await self.repo.add_trade(
+            return await self.repo.start_trade(
                 {
-                    "id": trade_id,
                     "kind": "knowledge",
                     "buyer_subject": subject,
                     "seller_subject": listing["seller_subject"],
@@ -527,13 +535,71 @@ class MarketService:
                     "title": listing["title"],
                     "price": listing["price"],
                     "target_app": body.target_app,
-                    "copied": copied,
+                    "copied": [],
                     "demand_id": demand_id,
+                    "status": "copying",
+                    "request_key": body.request_id,
+                    "request_digest": digest,
+                    "planned": [
+                        {
+                            "seller_item_id": str(item["item_id"]),
+                            "name": item.get("name"),
+                            "sha256": item.get("sha256"),
+                        }
+                        for item in listing["items"]
+                    ],
                 }
             )
-            if demand_id is not None:
-                await self.repo.update_demand(demand_id, status="closed")
-        return trade_view(trade, viewer=subject)
+
+    async def _copy(self, trade: Row) -> Row:
+        """接着复制没复制完的，逐份记下；都复制完记成交、关掉需求。"""
+        vault = self._need_vault()
+        for n, item in enumerate(trade["planned"]):
+            if n < len(trade["copied"]):
+                continue
+            got = await vault.purchase(
+                seller=trade["seller_subject"],
+                seller_item_id=str(item["seller_item_id"]),
+                buyer=trade["buyer_subject"],
+                buyer_app=trade["target_app"],
+                transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
+            )
+            async with self.repo.transaction():
+                trade = await self._locked_trade(trade["id"])
+                if len(trade["copied"]) == n:  # 并发重来的那一个已经记了就不再记
+                    copied = [
+                        *trade["copied"],
+                        {
+                            "seller_item_id": str(item["seller_item_id"]),
+                            "item_id": str(got.get("item_id")),
+                            "name": str(got.get("name") or item.get("name")),
+                            "sha256": str(got.get("sha256") or item.get("sha256")),
+                        },
+                    ]
+                    await self.repo.update_trade(trade["id"], copied=copied)
+                    trade = {**trade, "copied": copied}
+        async with self.repo.transaction():
+            trade = await self._locked_trade(trade["id"])
+            if trade["status"] != "done":
+                await self.repo.update_trade(trade["id"], status="done")
+                if trade["demand_id"] is not None:
+                    await self.repo.update_demand(trade["demand_id"], status="closed")
+                trade = {**trade, "status": "done"}
+        return trade
+
+    async def _locked_trade(self, trade_id: uuid.UUID) -> Row:
+        found = await self.repo.get_trade(trade_id, for_update=True)
+        assert found is not None
+        return found
+
+    def _need_vault(self) -> KnowledgeVault:
+        if self.vault is None:
+            raise AppException(
+                code="knowbase_unconfigured",
+                status_code=503,
+                msg="knowbase_unconfigured",
+            )
+        return self.vault
 
     async def _items(
         self, subject: str, body: KnowledgeListingIn, user_token: UserToken
@@ -1137,7 +1203,7 @@ class MarketAdmin:
         return [
             trade_view(t, viewer=None)
             for t in await self.repo.trades(
-                limit=PAGE_SIZE * 4, offset=(page - 1) * PAGE_SIZE * 4
+                copying=True, limit=PAGE_SIZE * 4, offset=(page - 1) * PAGE_SIZE * 4
             )
         ]
 
@@ -1334,6 +1400,7 @@ def trade_view(t: Row, *, viewer: str | None) -> Row:
             for c in t["copied"] or []
         ],
         "demand_id": str(t["demand_id"]) if t["demand_id"] else None,
+        "status": t["status"],
         "created_at": _iso(t["created_at"]),
     }
     if viewer is not None:
