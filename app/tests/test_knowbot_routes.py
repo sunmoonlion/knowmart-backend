@@ -144,6 +144,34 @@ async def test_knowlab_stops_a_version_of_its_owner(wired) -> None:
 
 
 @pytest.mark.asyncio
+async def test_knowlab_sends_what_became_of_unlisted_versions(wired) -> None:
+    _, repo = wired
+    url = f"/api/internal/v1/knowmart/owners/{OWNER}/sources/knowlab-r1/unlisted"
+    async with client() as c:
+        ok = await c.put(
+            url, json={"versions": [{"version": "1", "outcome": "rejected"}]}
+        )
+        assert ok.status_code == 204
+        assert await repo.unlisted_of("knowlab-r1", OWNER) == {"1": "rejected"}
+        bad = await c.put(url, json={"versions": [{"version": "1", "outcome": "x"}]})
+        assert bad.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_knowlab_experts_are_not_stopped_here(wired) -> None:
+    async with client() as c:
+        knowbot = (await _deliver(c, "delivery-0001", ref="knowlab-r1")).json()[
+            "knowbot_id"
+        ]
+        c.cookies.set("sunmoonai_knowmart_web_sid", "member")
+        url = f"/api/web/v1/knowbots/{knowbot}/versions/1/stop"
+        refused = await c.post(url, headers={"Origin": ORIGIN, "X-CSRF-Token": CSRF})
+        assert (
+            refused.status_code == 409 and refused.json()["code"] == "stop_in_knowlab"
+        )
+
+
+@pytest.mark.asyncio
 async def test_summon_is_owner_scoped_and_hides_others(wired) -> None:
     async with client() as c:
         knowbot = (await _deliver(c, "delivery-0001")).json()["knowbot_id"]
@@ -185,6 +213,11 @@ async def test_internal_routes_require_their_own_relation() -> None:
         assert no_token.status_code == 401
         no_token = await c.post(
             "/api/internal/v1/knowmart/owners/u/knowbots/x/versions/1/stop"
+        )
+        assert no_token.status_code == 401
+        no_token = await c.put(
+            "/api/internal/v1/knowmart/owners/u/sources/x/unlisted",
+            json={"versions": []},
         )
         assert no_token.status_code == 401
     # 公网地址来的：当没有这个接口，连令牌都不看

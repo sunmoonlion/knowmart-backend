@@ -37,6 +37,8 @@ from app.domain.knowbots.catalog import (
 OWNER = re.compile(r"^[A-Za-z0-9._:@-]{1,512}$")
 VERSION = re.compile(r"^[1-9][0-9]{0,5}$")
 PAGE_SIZE = 24
+KNOWLAB_REF = "knowlab-"  # knowlab 交付时的分身引用都这样开头
+MAX_GAP_SCAN = 1000
 UPDATED_WITHIN = {"7d": timedelta(days=7), "30d": timedelta(days=30)}
 
 DataFilter = Literal["all", "own", "user"]
@@ -173,6 +175,11 @@ class ExpertCatalog:
             selected = _latest(bot)
         if selected is None:
             raise _not_found()
+        outcomes = (
+            await self.repo.unlisted_of(bot.source_ref, bot.owner_subject)
+            if owned
+            else {}
+        )
         return {
             "knowbot_id": str(bot.id),
             "name": bot.name,
@@ -192,6 +199,13 @@ class ExpertCatalog:
                     bot.versions, key=lambda v: int(v.version), reverse=True
                 )
             ],
+            # 空号：knowlab 测试通过、没上架的那几版（SDD 0037 第三节）；结局只给主人看
+            "unlisted": [
+                {"version": number, "outcome": outcomes.get(number)}
+                for number in _gaps(bot.versions)
+            ],
+            # 停用在哪儿做：knowlab 交来的到 knowlab 停（两边一生记在一处）
+            "stop_in": "knowlab" if bot.source_ref.startswith(KNOWLAB_REF) else "here",
             "sections": expert_sections(selected.manifest, owner=owned),
             "publisher": None
             if publisher is None
@@ -202,6 +216,15 @@ class ExpertCatalog:
                 "licenses": list(publisher.licenses),
             },
         }
+
+
+def _gaps(versions: Sequence[KnowbotVersionRecord]) -> list[str]:
+    """上架了的版本号里缺的那几个，新的在前；版本号离谱地大时不列（防一页几十万行）。"""
+    have = {int(v.version) for v in versions}
+    top = max(have, default=0)
+    if top > MAX_GAP_SCAN:
+        return []
+    return [str(n) for n in range(top, 0, -1) if n not in have]
 
 
 def _category_tree(bots: Sequence[KnowbotRecord]) -> list[dict[str, Any]]:

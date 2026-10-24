@@ -48,6 +48,8 @@ class MemoryKnowbots:
         # 发布主体与资质（SDD 0032）：测试直接往里放
         self.publishers: dict[uuid.UUID, dict[str, Any]] = {}
         self.licenses: list[dict[str, Any]] = []
+        # 没上架那几版的结局（SDD 0037）：（引用，版本号）→（主人，结局）
+        self.unlisted: dict[tuple[str, str], tuple[str, str]] = {}
         self.commits = 0
         self.rollbacks = 0
 
@@ -174,6 +176,30 @@ class MemoryKnowbots:
             if mine or public:
                 out.append(self._record(bot))
         return out
+
+    async def owner_of_source(self, source_ref: str) -> str | None:
+        for bot in self.bots.values():
+            if bot["source_ref"] == source_ref:
+                return str(bot["owner_subject"])
+        return None
+
+    async def replace_unlisted(
+        self,
+        *,
+        owner_subject: str,
+        source_ref: str,
+        versions: Sequence[tuple[str, str]],
+    ) -> None:
+        self.unlisted = {k: v for k, v in self.unlisted.items() if k[0] != source_ref}
+        for version, outcome in versions:
+            self.unlisted[(source_ref, version)] = (owner_subject, outcome)
+
+    async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:
+        return {
+            version: outcome
+            for (ref, version), (owner, outcome) in self.unlisted.items()
+            if ref == source_ref and owner == owner_subject
+        }
 
     async def licensed_publisher(
         self, publisher_id: uuid.UUID, category: str, *, today: date

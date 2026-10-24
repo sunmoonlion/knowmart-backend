@@ -251,3 +251,35 @@ async def test_experts_from_before_0006_become_uncategorized(db) -> None:
             text("select category from knowbot where id = :i"), {"i": bot.knowbot_id}
         )
         assert row.scalar_one() == "uncategorized"
+
+
+@pytest.mark.asyncio
+async def test_unlisted_outcomes_on_the_real_database(db) -> None:
+    """SDD 0037 第三节：没上架那几版的结局整份替换、只认主人，结局只有两种（库挡）。"""
+    async with db() as session:
+        svc = KnowbotService(SqlKnowbotRepository(session))
+        await svc.set_unlisted(
+            owner_subject=OWNER,
+            knowbot_ref="knowlab-r1",
+            versions=[{"version": "1", "outcome": "declined"}],
+        )
+        await svc.set_unlisted(
+            owner_subject=OWNER,
+            knowbot_ref="knowlab-r1",
+            versions=[
+                {"version": "1", "outcome": "rejected"},
+                {"version": "2", "outcome": "declined"},
+            ],
+        )
+    async with db() as session:
+        repo = SqlKnowbotRepository(session)
+        assert await repo.unlisted_of("knowlab-r1", OWNER) == {
+            "1": "rejected",
+            "2": "declined",
+        }
+        assert await repo.unlisted_of("knowlab-r1", "someone-else") == {}
+    with pytest.raises(DBAPIError):
+        async with db() as session, session.begin():
+            await session.execute(
+                text("UPDATE knowbot_unlisted_version SET outcome = 'stopped'")
+            )

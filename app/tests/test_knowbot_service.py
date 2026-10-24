@@ -142,6 +142,66 @@ async def test_stopped_version_cannot_be_summoned_and_others_cannot_stop() -> No
 
 
 @pytest.mark.asyncio
+async def test_knowlab_experts_are_stopped_only_by_knowlab() -> None:
+    """SDD 0037 第六节：knowlab 交来的专家，一生记在 knowlab；这里点停用回 409。"""
+    svc, _ = service()
+    result = await svc.deliver(
+        delivery_id="knowlab-expert-1",
+        owner_subject=OWNER,
+        knowbot_ref="knowlab-r1",
+        manifest=manifest(),
+    )
+    bot_id = str(result.knowbot_id)
+    with pytest.raises(ConcurrencyConflictError) as refused:
+        await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1")
+    assert refused.value.code == "stop_in_knowlab"
+    await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1", by_knowlab=True)
+    [bot] = await svc.list_for_owner(OWNER)
+    assert bot.versions[0].status == "stopped"
+
+
+@pytest.mark.asyncio
+async def test_unlisted_outcomes_are_replaced_whole_and_checked() -> None:
+    svc, repo = service()
+    await svc.set_unlisted(
+        owner_subject=OWNER,
+        knowbot_ref="knowlab-r1",
+        versions=[
+            {"version": "1", "outcome": "declined"},
+            {"version": "2", "outcome": "rejected"},
+        ],
+    )
+    await svc.set_unlisted(
+        owner_subject=OWNER,
+        knowbot_ref="knowlab-r1",
+        versions=[{"version": "2", "outcome": "rejected"}],
+    )
+    assert await repo.unlisted_of("knowlab-r1", OWNER) == {"2": "rejected"}
+    for bad in (
+        [{"version": "0", "outcome": "declined"}],
+        [{"version": "1", "outcome": "stopped"}],
+        [
+            {"version": "1", "outcome": "declined"},
+            {"version": "1", "outcome": "rejected"},
+        ],
+    ):
+        with pytest.raises(BadRequestError):
+            await svc.set_unlisted(
+                owner_subject=OWNER, knowbot_ref="knowlab-r1", versions=bad
+            )
+    await svc.deliver(
+        delivery_id="knowlab-expert-3",
+        owner_subject=OWNER,
+        knowbot_ref="knowlab-r1",
+        manifest=manifest("3"),
+    )
+    with pytest.raises(ConcurrencyConflictError):  # 已交付过：只认那个主人
+        await svc.set_unlisted(
+            owner_subject=OTHER, knowbot_ref="knowlab-r1", versions=[]
+        )
+
+
+@pytest.mark.asyncio
 async def test_list_shows_only_the_owners_knowbots() -> None:
     svc, repo = service()
     await deliver(svc, "delivery-0001", manifest())

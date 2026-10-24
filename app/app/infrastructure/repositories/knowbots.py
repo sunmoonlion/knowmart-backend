@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any
 
-from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy import and_, delete, exists, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +25,7 @@ from app.application.ports.knowbots import (
 from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
 from app.infrastructure.models.knowbots import (
     Knowbot,
+    KnowbotUnlistedVersion,
     KnowbotVersion,
     Publisher,
     PublisherLicense,
@@ -219,6 +220,47 @@ class SqlKnowbotRepository:
         return await self._with_versions(
             select(Knowbot).where(visible).order_by(Knowbot.created_at, Knowbot.id)
         )
+
+    async def owner_of_source(self, source_ref: str) -> str | None:
+        return (
+            await self.session.execute(
+                select(Knowbot.owner_subject).where(Knowbot.source_ref == source_ref)
+            )
+        ).scalar_one_or_none()
+
+    async def replace_unlisted(
+        self,
+        *,
+        owner_subject: str,
+        source_ref: str,
+        versions: Sequence[tuple[str, str]],
+    ) -> None:
+        await self.session.execute(
+            delete(KnowbotUnlistedVersion).where(
+                KnowbotUnlistedVersion.source_ref == source_ref
+            )
+        )
+        for version, outcome in versions:
+            self.session.add(
+                KnowbotUnlistedVersion(
+                    source_ref=source_ref,
+                    version=version,
+                    owner_subject=owner_subject,
+                    outcome=outcome,
+                )
+            )
+        await self.session.flush()
+
+    async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:
+        rows = await self.session.execute(
+            select(
+                KnowbotUnlistedVersion.version, KnowbotUnlistedVersion.outcome
+            ).where(
+                KnowbotUnlistedVersion.source_ref == source_ref,
+                KnowbotUnlistedVersion.owner_subject == owner_subject,
+            )
+        )
+        return {version: outcome for version, outcome in rows.all()}
 
     async def licensed_publisher(
         self, publisher_id: uuid.UUID, category: str, *, today: date

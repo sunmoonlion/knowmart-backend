@@ -135,7 +135,36 @@ async def stop_delivered_version(
 
     服务关系同交付；只认这个所有者的，别人的与没有的都是 404；停过的再停照样 204。
     """
-    await svc.stop(owner_subject=owner_subject, knowbot_id=knowbot_id, version=version)
+    await svc.stop(
+        owner_subject=owner_subject,
+        knowbot_id=knowbot_id,
+        version=version,
+        by_knowlab=True,
+    )
+    return Response(status_code=204, headers=NO_STORE)
+
+
+class UnlistedIn(Strict):
+    versions: list[dict[str, Any]] = Field(max_length=200)
+
+
+@internal_router.put(
+    "/owners/{owner_subject}/sources/{knowbot_ref}/unlisted", status_code=204
+)
+async def set_unlisted(
+    _: Annotated[ServiceCaller, Depends(require_deliver_service)],
+    body: UnlistedIn,
+    svc: Service,
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+    knowbot_ref: Annotated[str, Path(min_length=1, max_length=128)],
+) -> Response:
+    """knowlab 交来这个创意没上架那几版的结局（用户不要 / 审核没过，SDD 0037 第三节）。
+
+    整份替换，重发安全；服务关系同交付。详情页拿它写明空号那一版。
+    """
+    await svc.set_unlisted(
+        owner_subject=owner_subject, knowbot_ref=knowbot_ref, versions=body.versions
+    )
     return Response(status_code=204, headers=NO_STORE)
 
 
@@ -209,7 +238,11 @@ async def stop_version(
     knowbot_id: Annotated[str, Path(max_length=64)],
     version: Annotated[str, Path(max_length=16)],
 ) -> Response:
-    """停用某一版：之后请不了；已经请去在跑的不受影响。"""
+    """停用某一版：之后请不了；已经请去在跑的不受影响。
+
+    knowlab 交来的专家回 409 `stop_in_knowlab`：到 knowlab 的「专家」里停
+    （SDD 0037 第六节）。
+    """
     await svc.stop(
         owner_subject=session.principal.subject, knowbot_id=knowbot_id, version=version
     )

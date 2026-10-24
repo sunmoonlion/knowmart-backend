@@ -107,6 +107,24 @@ class KnowbotRepository(Protocol):
         可见范围是公开、发布主体在这个类目上有审核通过且 today 未过期的资质的。"""
         ...
 
+    async def owner_of_source(self, source_ref: str) -> str | None:
+        """这个 knowlab 引用对应的分身归谁；还没交付过的回 None。"""
+        ...
+
+    async def replace_unlisted(
+        self,
+        *,
+        owner_subject: str,
+        source_ref: str,
+        versions: Sequence[tuple[str, str]],
+    ) -> None:
+        """整份替换这个引用没上架那几版的结局：（版本号，declined | rejected）。"""
+        ...
+
+    async def unlisted_of(self, source_ref: str, owner_subject: str) -> dict[str, str]:
+        """版本号 → 结局；只认这个所有者交过来的。"""
+        ...
+
     async def licensed_publisher(
         self, publisher_id: uuid.UUID, category: str, *, today: date
     ) -> PublisherRecord | None:

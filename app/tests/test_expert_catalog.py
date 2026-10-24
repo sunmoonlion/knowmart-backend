@@ -237,6 +237,35 @@ async def test_detail_for_the_owner_shows_steps_and_versions() -> None:
         await svc.detail(OTHER, str(bot))
 
 
+@pytest.mark.asyncio
+async def test_the_detail_writes_what_became_of_versions_never_listed() -> None:
+    """SDD 0037 第三节：上架的版本号可能有空号，详情页写明空号那一版的结局。
+
+    结局只给主人看；knowlab 交来的专家停用在 knowlab 做。
+    """
+    repo = MemoryKnowbots()
+    bot = await deliver(repo, ME, "knowlab-r1", version="3")
+    await KnowbotService(repo).set_unlisted(
+        owner_subject=ME,
+        knowbot_ref="knowlab-r1",
+        versions=[{"version": "1", "outcome": "declined"}],
+    )
+    mine = await catalog(repo).detail(ME, str(bot))
+    assert mine["unlisted"] == [
+        {"version": "2", "outcome": None},  # 还没定、或 knowlab 还没交来
+        {"version": "1", "outcome": "declined"},
+    ]
+    assert mine["stop_in"] == "knowlab"
+    make_public(repo, bot)
+    theirs = await catalog(repo, public_market=True).detail(OTHER, str(bot))
+    assert theirs["unlisted"] == [
+        {"version": "2", "outcome": None},
+        {"version": "1", "outcome": None},
+    ]
+    plain = await deliver(repo, ME, "mine")
+    assert (await catalog(repo).detail(ME, str(plain)))["stop_in"] == "here"
+
+
 def test_sections_read_what_the_manifest_has() -> None:
     doc = manifest()
     doc["pack"]["answers"] = {

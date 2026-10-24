@@ -181,3 +181,27 @@ class KnowbotVersion(Base):
             "status IN ('active', 'stopped')", name="ck_knowbot_version_status"
         ),
     )
+
+
+class KnowbotUnlistedVersion(Base):
+    """knowlab 测试通过、没上架的那几版的结局（SDD 0037 第三节）：详情页写明空号那一版。
+
+    knowlab 整份替换；只记结局（用户不要 / 运营审核没过），理由在 knowlab。
+    """
+
+    __tablename__ = "knowbot_unlisted_version"
+
+    source_ref: Mapped[str] = mapped_column(String(128), primary_key=True)
+    version: Mapped[str] = mapped_column(String(16), primary_key=True)
+    owner_subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "outcome IN ('declined', 'rejected')",
+            name="ck_knowbot_unlisted_version_outcome",
+        ),
+    )

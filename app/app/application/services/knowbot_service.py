@@ -33,6 +33,9 @@ DELIVERY_ID = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 SOURCE_REF = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 OWNER = re.compile(r"^[A-Za-z0-9._:@-]{1,512}$")
 VERSION = re.compile(r"^[1-9][0-9]{0,5}$")
+KNOWLAB_REF = "knowlab-"  # knowlab 交付时的分身引用都这样开头
+OUTCOMES = frozenset({"declined", "rejected"})
+MAX_UNLISTED = 200
 
 
 @dataclass(frozen=True)
@@ -215,14 +218,67 @@ class KnowbotService:
             return []
         return await self.repo.list_for_owner(owner_subject)
 
-    async def stop(self, *, owner_subject: str, knowbot_id: str, version: str) -> None:
+    async def stop(
+        self,
+        *,
+        owner_subject: str,
+        knowbot_id: str,
+        version: str,
+        by_knowlab: bool = False,
+    ) -> None:
+        """停用某一版。
+
+        knowlab 交来的专家，一生（含停用）记在 knowlab（SDD 0037 第六节），只认
+        knowlab 来停；用户在这里点的回 409 `stop_in_knowlab`，页面带他去 knowlab，
+        免得两边对不上。
+        """
         async with self.repo.transaction():
             bot = await self._owned(owner_subject, knowbot_id)
+            if not by_knowlab and bot.source_ref.startswith(KNOWLAB_REF):
+                raise ConcurrencyConflictError(
+                    "Stop this version in knowlab", code="stop_in_knowlab"
+                )
             if not VERSION.fullmatch(version or ""):
                 raise _not_found()
             if await self.repo.get_version(bot.id, version) is None:
                 raise _not_found()
             await self.repo.set_version_status(bot.id, version, "stopped")
+
+    async def set_unlisted(
+        self,
+        *,
+        owner_subject: str,
+        knowbot_ref: str,
+        versions: Sequence[dict[str, Any]],
+    ) -> None:
+        """knowlab 交来这个引用没上架那几版的结局（SDD 0037 第三节），整份替换。
+
+        版本号、结局不合规矩的回 400；分身已交付过、主人不是这个人的回 409。
+        """
+        _require(OWNER, owner_subject, "owner_subject")
+        _require(SOURCE_REF, knowbot_ref, "knowbot_ref")
+        if len(versions) > MAX_UNLISTED:
+            raise BadRequestError("Too many versions", code="unlisted_invalid")
+        pairs: list[tuple[str, str]] = []
+        for item in versions:
+            version, outcome = str(item.get("version")), item.get("outcome")
+            if not VERSION.fullmatch(version) or outcome not in OUTCOMES:
+                raise BadRequestError(
+                    "A version or outcome is invalid", code="unlisted_invalid"
+                )
+            pairs.append((version, str(outcome)))
+        if len({v for v, _ in pairs}) != len(pairs):
+            raise BadRequestError("A version is listed twice", code="unlisted_invalid")
+        async with self.repo.transaction():
+            owner = await self.repo.owner_of_source(knowbot_ref)
+            if owner is not None and owner != owner_subject:
+                raise ConcurrencyConflictError(
+                    "This knowbot belongs to another owner",
+                    code="knowbot_owner_mismatch",
+                )
+            await self.repo.replace_unlisted(
+                owner_subject=owner_subject, source_ref=knowbot_ref, versions=pairs
+            )
 
 
 def version_view(record: KnowbotVersionRecord) -> dict[str, Any]:
