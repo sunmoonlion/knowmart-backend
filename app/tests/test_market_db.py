@@ -335,7 +335,7 @@ async def test_knowlab_asks_public_on_delivery_only_qualified_go_to_review(
     async def ask(svc: MarketService, admin: MarketAdmin) -> str:
         return await svc.ask_public_on_delivery(SELLER, str(bot))
 
-    assert await world.run(ask) == "self"  # 没有发布主体：留自用，不报错
+    assert await world.run(ask) == "not_qualified"  # 没有发布主体：留自用，照实回
     await approved_publisher(world)
     assert await world.run(ask) == "pending"
     assert await world.run(ask) == "pending"
@@ -362,6 +362,43 @@ def knowledge(**over: Any) -> KnowledgeListingIn:
         "price": "50",
     }
     return KnowledgeListingIn.model_validate(body | over)
+
+
+async def test_an_expert_without_a_category_gets_one_when_going_public(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    """knowlab 交来的专家起初没有类目：交付时照实回 category_needed；卖家申请公开时选
+    类目；被平台下架的点「只自用」也不冲掉下架（Fable 评审 P2-1、P2-10）。"""
+    bot = (await deliver(db, "delivery-0401", manifest(), ref="knowlab-r4")).knowbot_id
+    await approved_publisher(world)
+
+    async def ask(svc: MarketService, admin: MarketAdmin) -> str:
+        return await svc.ask_public_on_delivery(SELLER, str(bot))
+
+    assert await world.run(ask) == "category_needed"
+
+    async def go_public(svc: MarketService, admin: MarketAdmin) -> None:
+        with pytest.raises(BadRequestError) as refused:
+            await svc.set_expert_listing(
+                SELLER, str(bot), ExpertListingIn(visibility="public")
+            )
+        assert refused.value.code == "category_invalid"
+        listing = await svc.set_expert_listing(
+            SELLER,
+            str(bot),
+            ExpertListingIn(visibility="public", category="tools.office"),
+        )
+        assert listing["listing_status"] == "pending"
+        mine = {e["knowbot_id"]: e for e in await svc.my_experts(SELLER)}
+        assert mine[str(bot)]["category"]["code"] == "tools.office"
+        await admin.take_down("expert", f"{bot}@1", "被举报核实", OPS)
+        kept = await svc.set_expert_listing(
+            SELLER, str(bot), ExpertListingIn(visibility="private")
+        )
+        assert kept["listing_status"] == "taken_down"
+
+    await world.run(go_public)
 
 
 async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) -> None:

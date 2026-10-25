@@ -119,10 +119,14 @@ class LicenseIn(Strict):
 
 
 class ExpertListingIn(Strict):
-    """专家条目：申请公开（要资质）或留着自用；每次请的价格，空是免费。"""
+    """专家条目：申请公开（要资质）或留着自用；每次请的价格，空是免费。
+
+    申请公开时选类目（没选过的必须选；knowlab 交来的专家起初没有类目，Fable P2-1）。
+    """
 
     visibility: Literal["private", "public"]
     price: Decimal | None = None
+    category: str | None = Field(default=None, min_length=1, max_length=64)
 
     _check_price = field_validator("price")(_price)
 

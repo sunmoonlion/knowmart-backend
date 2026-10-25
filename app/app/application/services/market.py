@@ -302,17 +302,22 @@ class MarketService:
             changes: Row = {
                 "price": body.price,
                 "visibility": "private",
-                "listing_status": "self",
+                # 被平台下架的仍记着下架，不被「只自用」冲掉（Fable 评审 P2-10）
+                "listing_status": "taken_down"
+                if bot["listing_status"] == "taken_down"
+                else "self",
             }
         else:
-            check_category(bot["category"])
-            publisher = await self._qualified(subject, bot["category"])
+            category = body.category or bot["category"]
+            check_category(category)
+            publisher = await self._qualified(subject, category)
             if bot["listing_status"] == "taken_down":
                 raise _conflict(
                     "This expert was taken down by the platform", "listing_taken_down"
                 )
             changes = {
                 "price": body.price,
+                "category": category,
                 "publisher_id": publisher["id"],
                 "listing_status": "public"
                 if bot["visibility"] == "public"
@@ -329,7 +334,9 @@ class MarketService:
 
         那边运营审核定了公开：发布主体与类目资质都过的，这一位进上架审核；不过的留
         自用、不报错（资质在这里审，卖家补齐后可在「我发布的」再申请）。已在审、
-        已公开、被平台下架的不动。回上架状态。
+        已公开、被平台下架的不动。回上架状态；没进上架审核的照实回为什么：还没选
+        类目回 category_needed，资质没过回 not_qualified（只在回包里，不存；Fable
+        评审 P2-1）。
         """
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] != subject:
@@ -338,9 +345,12 @@ class MarketService:
             return str(bot["listing_status"])
         try:
             check_category(bot["category"])
+        except BadRequestError:
+            return "category_needed"
+        try:
             publisher = await self._qualified(subject, bot["category"])
         except BadRequestError:
-            return str(bot["listing_status"])
+            return "not_qualified"
         async with self.repo.transaction():
             await self.repo.update_knowbot(
                 bot["id"], publisher_id=publisher["id"], listing_status="pending"
