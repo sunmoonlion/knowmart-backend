@@ -513,9 +513,15 @@ class MarketService:
         按成交编号与序号幂等复制，重来不会多出副本。
         """
         digest = _buy_digest(listing_id, body)
-        trade = await self.repo.trade_by_request(
-            subject, body.request_id
-        ) or await self.repo.copying_trade(subject, digest)
+        trade = await self.repo.trade_by_request(subject, body.request_id)
+        if trade is None:
+            trade = await self.repo.copying_trade(subject, digest)
+            if trade is not None:
+                # 换了键接手：新键也记在这笔上，以后用新键重试回的还是它（Fable P2-7）
+                async with self.repo.transaction():
+                    await self.repo.add_request_alias(
+                        subject, body.request_id, trade["id"]
+                    )
         if trade is None:
             trade = await self._start_buying(subject, listing_id, body, digest)
         if trade["request_digest"] != digest:

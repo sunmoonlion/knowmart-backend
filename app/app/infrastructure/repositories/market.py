@@ -27,6 +27,7 @@ from app.infrastructure.models.market import (
     MarketReport,
     PublisherDocument,
     Trade,
+    TradeRequestAlias,
     TradeReview,
 )
 
@@ -562,7 +563,27 @@ class SqlMarketRepository:
                 )
             )
         ).scalar_one_or_none()
+        if row is None:  # 换键接手时记下的新键
+            row = (
+                await self.session.execute(
+                    select(Trade)
+                    .join(TradeRequestAlias, TradeRequestAlias.trade_id == Trade.id)
+                    .where(
+                        TradeRequestAlias.buyer_subject == buyer,
+                        TradeRequestAlias.request_key == request_key,
+                    )
+                )
+            ).scalar_one_or_none()
         return None if row is None else _row(row)
+
+    async def add_request_alias(
+        self, buyer: str, request_key: str, trade_id: uuid.UUID
+    ) -> None:
+        await self.session.execute(
+            pg_insert(TradeRequestAlias)
+            .values(buyer_subject=buyer, request_key=request_key, trade_id=trade_id)
+            .on_conflict_do_nothing()
+        )
 
     async def copying_trade(
         self, buyer: str, request_digest: str

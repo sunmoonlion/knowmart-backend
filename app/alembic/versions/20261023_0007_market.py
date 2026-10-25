@@ -270,6 +270,19 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("request_key IS NOT NULL"),
     )
+    # 换了键接手同一笔时，新键也记在这笔上：用新键重试回的还是它（Fable 评审 P2-7）
+    op.create_table(
+        "trade_request_alias",
+        sa.Column("buyer_subject", sa.String(512), primary_key=True),
+        sa.Column("request_key", sa.String(64), primary_key=True),
+        sa.Column(
+            "trade_id",
+            pg.UUID(as_uuid=True),
+            sa.ForeignKey("trade.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        _created(),
+    )
     op.create_table(
         "trade_review",
         sa.Column(
@@ -342,6 +355,7 @@ def downgrade() -> None:
     op.drop_index("ix_market_message_thread", table_name="market_message")
     op.drop_table("market_message")
     op.drop_table("trade_review")
+    op.drop_table("trade_request_alias")
     op.drop_index("uq_trade_request", table_name="trade")
     op.drop_index("ix_trade_listing", table_name="trade")
     op.drop_index("ix_trade_seller", table_name="trade")

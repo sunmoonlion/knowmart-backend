@@ -139,6 +139,19 @@ class Trade(Base):
     created_at: Mapped[datetime] = _now()
 
 
+class TradeRequestAlias(Base):
+    """换了键接手同一笔时记下的新键（Fable 评审 P2-7）。"""
+
+    __tablename__ = "trade_request_alias"
+
+    buyer_subject: Mapped[str] = mapped_column(String(512), primary_key=True)
+    request_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    trade_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("trade.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = _now()
+
+
 class TradeReview(Base):
     __tablename__ = "trade_review"
 

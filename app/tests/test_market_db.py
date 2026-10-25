@@ -624,6 +624,9 @@ async def test_buying_resumes_where_it_stopped(world: World) -> None:
     second = BuyIn(request_id="retry-0003", target_app="knowbench")
     resumed = await world.run(buy_second)
     assert resumed["status"] == "done" and len(world.vault.purchases) == 4
+    # 接手时用的新键也记在这笔上：用它再发，回的还是这一笔，不再买一遍（Fable P2-7）
+    again = await world.run(buy_second)
+    assert again["trade_id"] == resumed["trade_id"] and len(world.vault.purchases) == 4
 
     # 并发重来：一笔
     third = BuyIn(request_id="retry-0004", target_app="knowbench")
