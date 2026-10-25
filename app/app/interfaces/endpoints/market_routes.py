@@ -23,6 +23,7 @@ from app.domain.market import (
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
+    OfferIn,
     PublisherIn,
     ReplyIn,
     ReportDecision,
@@ -295,6 +296,16 @@ async def my_responses(principal: User, svc: Service) -> JSONResponse:
 @web_router.post("/responses/{response_id}/withdraw")
 async def withdraw(principal: User, svc: Service, response_id: Id) -> JSONResponse:
     return ok({"response": await svc.withdraw_response(principal.subject, response_id)})
+
+
+@web_router.post("/responses/{response_id}/offer")
+async def attach_offer(
+    principal: User, body: OfferIn, svc: Service, response_id: Id
+) -> JSONResponse:
+    """被选中的卖家补附条目（Fable 评审 P2-9）。"""
+    return ok(
+        {"response": await svc.attach_offer(principal.subject, response_id, body)}
+    )
 
 
 @web_router.get("/trades")

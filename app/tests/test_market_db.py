@@ -33,6 +33,7 @@ from app.domain.market import (
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
+    OfferIn,
     PublisherIn,
     ReplyIn,
     ReportDecision,
@@ -802,6 +803,79 @@ async def test_an_approved_publisher_or_license_can_be_revoked(
         assert (await admin.queue())["approved_publishers"] == []
 
     await world.run(revoke_publisher)
+
+
+async def test_a_chosen_demand_can_be_settled_or_closed(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    """选定之后：补附条目再成交、请专家记在需求上、或买家直接关（Fable P2-9）。"""
+    await approved_publisher(world)
+    bot = (
+        await deliver(db, "delivery-0601", manifest(), ref="lab-bot-6", public=True)
+    ).knowbot_id
+
+    def demand_in(kind: str, title: str) -> DemandIn:
+        return DemandIn(
+            kind=kind,
+            title=title,
+            problem="做行业对比",
+            deadline=date(2026, 11, 30),
+            budget=Decimal("80"),
+        )
+
+    async def flow(svc: MarketService, admin: MarketAdmin) -> None:
+        # 先谈好、做好上架再附：补附条目，买家照它买，需求关掉
+        want = await svc.create_demand(BUYER, demand_in("knowledge", "要一份数据"))
+        offer = await svc.respond(
+            SELLER, want["demand_id"], ResponseIn(proposal="我来整理")
+        )
+        await svc.choose_response(BUYER, want["demand_id"], offer["response_id"])
+        listing = await svc.create_listing(SELLER, knowledge(), token)
+        await svc.submit_listing(SELLER, listing["listing_id"])
+        await admin.decide_listing(
+            listing["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        with pytest.raises(NotFoundError):  # 只有那位卖家能附
+            await svc.attach_offer(
+                OTHER,
+                offer["response_id"],
+                OfferIn(listing_kind="knowledge", listing_ref=listing["listing_id"]),
+            )
+        await svc.attach_offer(
+            SELLER,
+            offer["response_id"],
+            OfferIn(listing_kind="knowledge", listing_ref=listing["listing_id"]),
+        )
+        await svc.buy(
+            BUYER,
+            listing["listing_id"],
+            BuyIn(
+                request_id="settle-01",
+                target_app="knowbench",
+                demand_id=want["demand_id"],
+            ),
+        )
+        assert (await svc.demand(BUYER, want["demand_id"]))["status"] == "closed"
+        # 专家类：选中的那家附的是这位专家，请了就记在需求上、关掉
+        ask = await svc.create_demand(BUYER, demand_in("expert", "要一位专家"))
+        pitch = await svc.respond(
+            SELLER,
+            ask["demand_id"],
+            ResponseIn(listing_kind="expert", listing_ref=f"{bot}@1", proposal="请它"),
+        )
+        await svc.choose_response(BUYER, ask["demand_id"], pitch["response_id"])
+        made = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+        assert made is not None and made["demand_id"] == ask["demand_id"]
+        assert (await svc.demand(BUYER, ask["demand_id"]))["status"] == "closed"
+        # 选定了但不在这里成交：买家直接关
+        idle = await svc.create_demand(BUYER, demand_in("knowledge", "不要了"))
+        one = await svc.respond(SELLER, idle["demand_id"], ResponseIn(proposal="可以"))
+        await svc.choose_response(BUYER, idle["demand_id"], one["response_id"])
+        closed = await svc.close_demand(BUYER, idle["demand_id"])
+        assert closed["status"] == "closed"
+
+    await world.run(flow)
 
 
 async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:

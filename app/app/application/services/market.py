@@ -40,6 +40,7 @@ from app.domain.market import (
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
+    OfferIn,
     PublisherIn,
     ReplyIn,
     ReportDecision,
@@ -368,25 +369,44 @@ class MarketService:
     async def record_summon(
         self, *, buyer: str, knowbot_id: str, version: str
     ) -> Row | None:
-        """有人「请」了别人的专家：记一笔成交（价格按条目上写的，本期不收钱）。自己请自己的不记。"""
+        """有人「请」了别人的专家：记一笔成交（价格按条目上写的，本期不收钱）。自己请自己的不记。
+
+        买家有一条选定了的需求、选中的那家附的正是这位专家：这笔成交记在那条需求上、关掉
+        需求（Fable 评审 P2-9）。
+        """
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] == buyer:
             return None
+        demand_id = await self._demand_offering(buyer, str(bot["id"]))
         async with self.repo.transaction():
-            return trade_view(
-                await self.repo.add_trade(
-                    {
-                        "kind": "expert",
-                        "buyer_subject": buyer,
-                        "seller_subject": bot["owner_subject"],
-                        "listing_ref": f"{bot['id']}@{version}",
-                        "title": f"{bot['name']} 第 {version} 版",
-                        "price": bot["price"],
-                        "copied": [],
-                    }
-                ),
-                viewer=buyer,
+            trade = await self.repo.add_trade(
+                {
+                    "kind": "expert",
+                    "buyer_subject": buyer,
+                    "seller_subject": bot["owner_subject"],
+                    "listing_ref": f"{bot['id']}@{version}",
+                    "title": f"{bot['name']} 第 {version} 版",
+                    "price": bot["price"],
+                    "copied": [],
+                    "demand_id": demand_id,
+                }
             )
+            if demand_id is not None:
+                await self.repo.update_demand(demand_id, status="closed")
+            return trade_view(trade, viewer=buyer)
+
+    async def _demand_offering(self, buyer: str, knowbot_id: str) -> uuid.UUID | None:
+        for demand in await self.repo.demands_of(buyer):
+            if demand["status"] != "chosen" or not demand["chosen_response_id"]:
+                continue
+            response = await self.repo.get_response(str(demand["chosen_response_id"]))
+            if (
+                response is not None
+                and response["listing_kind"] == "expert"
+                and str(response["listing_ref"] or "").partition("@")[0] == knowbot_id
+            ):
+                return demand["id"]
+        return None
 
     async def expert_market(self, knowbot_id: str) -> Row:
         """专家详情页上的市场部分：价格、评价。"""
@@ -752,7 +772,8 @@ class MarketService:
         found = await self.repo.get_demand(demand_id)
         if found is None or found["buyer_subject"] != subject:
             raise _missing("demand")
-        if found["status"] != "open":
+        # 选定了也能关：比如线下谈完了、不在这里成交（Fable 评审 P2-9）
+        if found["status"] not in ("open", "chosen"):
             raise _conflict("This demand is not open", "demand_state")
         async with self.repo.transaction():
             await self.repo.update_demand(found["id"], status="closed")
@@ -818,6 +839,32 @@ class MarketService:
             raise _conflict("This response cannot be withdrawn", "response_state")
         async with self.repo.transaction():
             await self.repo.update_response(found["id"], status="withdrawn")
+        found = await self.repo.get_response(response_id)
+        assert found is not None
+        demand = await self.repo.get_demand(str(found["demand_id"]))
+        return response_view(
+            found, viewer=subject, buyer=demand["buyer_subject"] if demand else ""
+        )
+
+    async def attach_offer(self, subject: str, response_id: str, body: OfferIn) -> Row:
+        """被选中的卖家补附条目：先谈好、做好上架再给买家（Fable 评审 P2-9）。
+
+        买家照这一条买或请，成交随即关掉需求。
+        """
+        found = await self.repo.get_response(response_id)
+        if found is None or found["seller_subject"] != subject:
+            raise _missing("response")
+        if found["status"] != "chosen":
+            raise _conflict(
+                "Only the chosen response can attach a listing", "response_state"
+            )
+        await self._check_own_listing_ref(subject, body.listing_kind, body.listing_ref)
+        async with self.repo.transaction():
+            await self.repo.update_response(
+                found["id"],
+                listing_kind=body.listing_kind,
+                listing_ref=body.listing_ref,
+            )
         found = await self.repo.get_response(response_id)
         assert found is not None
         demand = await self.repo.get_demand(str(found["demand_id"]))

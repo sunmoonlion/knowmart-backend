@@ -190,6 +190,13 @@ class ResponseIn(Strict):
         return self
 
 
+class OfferIn(Strict):
+    """被选中的卖家补附的条目（Fable 评审 P2-9）。"""
+
+    listing_kind: Kind
+    listing_ref: str = Field(min_length=1, max_length=128)
+
+
 class MessageIn(Strict):
     body: str = Field(min_length=1, max_length=2000)
 
