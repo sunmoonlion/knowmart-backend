@@ -157,4 +157,5 @@ class KnowledgeVault(Protocol):
         buyer: str,
         buyer_app: str,
         transaction_ref: str,
+        no_resale: bool = False,
     ) -> Row: ...

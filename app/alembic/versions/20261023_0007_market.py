@@ -257,6 +257,8 @@ def upgrade() -> None:
         sa.Column("request_key", sa.String(64)),
         sa.Column("request_digest", sa.String(64)),
         sa.Column("planned", pg.JSONB(), nullable=False, server_default="[]"),
+        # 成交那一刻卖家写的能不能转卖：以后改勾、下架再上架都不影响（Fable 评审 P2-16）
+        sa.Column("resale_allowed", sa.Boolean()),
         # 卖家那份没了、复制不下去：终态 failed，记原因（Fable 评审 P1-2）
         sa.Column("failure", sa.String(64)),
         _created(),

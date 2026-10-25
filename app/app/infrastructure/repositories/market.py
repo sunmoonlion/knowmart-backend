@@ -652,35 +652,21 @@ class SqlMarketRepository:
         return [_row(r) for r in rows]
 
     async def bought_without_resale(self, buyer: str) -> set[str]:
-        """这个人买来、不许转卖的知识的内容摘要（上架时不许拿它们再卖）。"""
-        trades = (
+        """这个人买来、不许转卖的知识的内容摘要（上架时不许拿它们再卖）。
+
+        按成交那一刻卖家写的算，不按条目现在的勾选（Fable 评审 P2-16）；复制到一半的
+        也算。
+        """
+        rows = (
             await self.session.execute(
-                select(Trade.listing_ref, Trade.planned).where(
-                    Trade.buyer_subject == buyer, Trade.kind == "knowledge"
+                select(Trade.planned).where(
+                    Trade.buyer_subject == buyer,
+                    Trade.kind == "knowledge",
+                    Trade.resale_allowed.is_not(True),
                 )
             )
-        ).all()
-        keys = {k for k in (_id(ref) for ref, _ in trades) if k is not None}
-        if not keys:
-            return set()
-        allowed = {
-            r.id
-            for r in (
-                await self.session.execute(
-                    select(KnowledgeListing).where(
-                        KnowledgeListing.id.in_(keys),
-                        KnowledgeListing.resale_allowed.is_(True),
-                    )
-                )
-            ).scalars()
-        }
-        # 按要复制的几份算：复制到一半的也算买了（Astra 评审 F07）
-        return {
-            str(c.get("sha256"))
-            for ref, planned in trades
-            if _id(ref) not in allowed
-            for c in planned or []
-        }
+        ).scalars()
+        return {str(c.get("sha256")) for planned in rows for c in planned or []}
 
     async def add_review(self, fields: dict[str, Any]) -> dict[str, Any]:
         row = TradeReview(**fields)

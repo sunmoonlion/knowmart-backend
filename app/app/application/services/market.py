@@ -592,6 +592,7 @@ class MarketService:
                     "copied": [],
                     "demand_id": demand_id,
                     "status": "copying",
+                    "resale_allowed": bool(listing["resale_allowed"]),
                     "request_key": body.request_id,
                     "request_digest": digest,
                     "planned": [
@@ -618,6 +619,7 @@ class MarketService:
                     buyer=trade["buyer_subject"],
                     buyer_app=trade["target_app"],
                     transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
+                    no_resale=trade["resale_allowed"] is not True,
                 )
             except NotFoundError as exc:
                 if exc.code != "item_gone":
@@ -685,7 +687,8 @@ class MarketService:
         items = []
         for ref in body.items:
             got = await self.vault.item(token, ref.item_id)
-            if str(got.get("sha256")) in no_resale:
+            # 资料自己带着「不许转卖」（买来的、下载了再传的同样内容），或按买过的摘要
+            if got.get("no_resale") is True or str(got.get("sha256")) in no_resale:
                 raise BadRequestError(
                     f"{got.get('name')} was bought without the right to resell",
                     code="resale_not_allowed",

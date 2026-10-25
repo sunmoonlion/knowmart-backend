@@ -186,6 +186,7 @@ class KnowbaseUserData:
         buyer: str,
         buyer_app: str,
         transaction_ref: str,
+        no_resale: bool = False,
     ) -> dict[str, Any]:
         token = await self._service_token("user-data-purchase")
         _, body, _ = await self._send(
@@ -198,6 +199,7 @@ class KnowbaseUserData:
                 "buyer": buyer,
                 "buyer_app": buyer_app,
                 "transaction_ref": transaction_ref,
+                "no_resale": no_resale,
             },
         )
         return body
@@ -308,6 +310,7 @@ class KnowbaseVault:
         buyer: str,
         buyer_app: str,
         transaction_ref: str,
+        no_resale: bool = False,
     ) -> dict[str, Any]:
         try:
             return await self.client.purchase(
@@ -316,6 +319,7 @@ class KnowbaseVault:
                 buyer=buyer,
                 buyer_app=buyer_app,
                 transaction_ref=transaction_ref,
+                no_resale=no_resale,
             )
         except KnowbaseRefused as exc:
             if exc.status == 404:

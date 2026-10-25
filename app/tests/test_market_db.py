@@ -458,6 +458,16 @@ async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) 
         with pytest.raises(BadRequestError) as refused:
             await svc.create_listing(BUYER, knowledge(), token)
         assert refused.value.code == "resale_not_allowed"
+        # 复制时带上「不许转卖」；卖家事后改勾也不影响已买的（按成交那一刻，P2-16）
+        assert world.vault.purchases[0]["no_resale"] is True
+        await svc.repo.update_listing(listing_id, resale_allowed=True)
+        with pytest.raises(BadRequestError):
+            await svc.create_listing(BUYER, knowledge(), token)
+        # 资料自己带着标记（下载了再传的同样内容），按标记拦
+        world.vault.items["d3"] = {**world.vault.items["d2"], "no_resale": True}
+        with pytest.raises(BadRequestError) as flagged:
+            await svc.create_listing(BUYER, knowledge(items=[{"item_id": "d3"}]), token)
+        assert flagged.value.code == "resale_not_allowed"
         # 卖家下架：买家那份照旧在（成交记录还在）
         assert (await svc.delist_listing(SELLER, listing_id))["status"] == "delisted"
         assert len(await svc.my_trades(BUYER, "buyer")) == 1

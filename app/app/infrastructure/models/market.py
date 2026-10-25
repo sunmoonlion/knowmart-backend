@@ -136,6 +136,8 @@ class Trade(Base):
         JSONB, nullable=False, default=list
     )
     failure: Mapped[str | None] = mapped_column(String(64))
+    # 成交那一刻卖家写的能不能转卖（Fable 评审 P2-16）
+    resale_allowed: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[datetime] = _now()
 
 
