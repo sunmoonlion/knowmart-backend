@@ -115,6 +115,16 @@ class SqlMarketRepository:
             update(Publisher).where(Publisher.id == key).values(**fields)
         )
 
+    async def approved_publishers(self) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(Publisher)
+                .where(Publisher.review_status == "approved")
+                .order_by(Publisher.reviewed_at.desc())
+            )
+        ).scalars()
+        return [_row(r, skip=("id_number_hash",)) for r in rows]
+
     async def pending_publishers(self) -> list[dict[str, Any]]:
         rows = (
             await self.session.execute(
@@ -283,17 +293,13 @@ class SqlMarketRepository:
         return [_row(r) for r in rows]
 
     async def public_experts_of(
-        self, publisher_id: uuid.UUID, category: str
+        self, publisher_id: uuid.UUID, category: str | None
     ) -> list[dict[str, Any]]:
-        rows = (
-            await self.session.execute(
-                select(Knowbot).where(
-                    Knowbot.publisher_id == publisher_id,
-                    Knowbot.category == category,
-                    Knowbot.visibility == "public",
-                )
-            )
-        ).scalars()
+        """这个发布主体公开着的专家；类目不给就是全部。"""
+        where = [Knowbot.publisher_id == publisher_id, Knowbot.visibility == "public"]
+        if category is not None:
+            where.append(Knowbot.category == category)
+        rows = (await self.session.execute(select(Knowbot).where(*where))).scalars()
         return [_row(r) for r in rows]
 
     # ---------- 知识条目 ----------
@@ -403,16 +409,17 @@ class SqlMarketRepository:
         return [_row(r) for r in rows]
 
     async def listed_by_publisher(
-        self, publisher_id: uuid.UUID, category: str
+        self, publisher_id: uuid.UUID, category: str | None
     ) -> list[dict[str, Any]]:
+        """这个发布主体在架的知识条目；类目不给就是全部。"""
+        where = [
+            KnowledgeListing.publisher_id == publisher_id,
+            KnowledgeListing.status.in_(("pending", "listed")),
+        ]
+        if category is not None:
+            where.append(KnowledgeListing.category == category)
         rows = (
-            await self.session.execute(
-                select(KnowledgeListing).where(
-                    KnowledgeListing.publisher_id == publisher_id,
-                    KnowledgeListing.category == category,
-                    KnowledgeListing.status == "listed",
-                )
-            )
+            await self.session.execute(select(KnowledgeListing).where(*where))
         ).scalars()
         return [_row(r) for r in rows]
 

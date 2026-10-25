@@ -30,6 +30,7 @@ from app.domain.market import (
     ResponseIn,
     ReviewDecision,
     ReviewIn,
+    RevokeIn,
     RulesIn,
 )
 from app.domain.security import Principal
@@ -388,6 +389,24 @@ async def decide_license(
     admin: Admin, operator: Operator, body: ReviewDecision, license_id: Id
 ) -> Response:
     await admin.decide_license(license_id, body, operator.subject)
+    return Response(status_code=204, headers=NO_STORE)
+
+
+@admin_router.post("/publishers/{publisher_id}/revocation", status_code=204)
+async def revoke_publisher(
+    admin: Admin, operator: Operator, body: RevokeIn, publisher_id: Id
+) -> Response:
+    """撤销审过的发布主体（Fable 评审 P2-8）。"""
+    await admin.revoke_publisher(publisher_id, body, operator.subject)
+    return Response(status_code=204, headers=NO_STORE)
+
+
+@admin_router.post("/licenses/{license_id}/revocation", status_code=204)
+async def revoke_license(
+    admin: Admin, operator: Operator, body: RevokeIn, license_id: Id
+) -> Response:
+    """撤销审过的证照（Fable 评审 P2-8）。"""
+    await admin.revoke_license(license_id, body, operator.subject)
     return Response(status_code=204, headers=NO_STORE)
 
 

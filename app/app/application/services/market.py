@@ -47,6 +47,7 @@ from app.domain.market import (
     ResponseIn,
     ReviewDecision,
     ReviewIn,
+    RevokeIn,
     demand_open,
     flagged,
     hash_id,
@@ -1048,8 +1049,22 @@ class MarketAdmin:
                     "flagged": flagged(bot["name"], bot["tagline"]),
                 }
             )
+        # 审过的：能撤销（Fable 评审 P2-8）
+        approved = []
+        for p in await self.repo.approved_publishers():
+            approved.append(
+                {
+                    **publisher_view(p, own=True),
+                    "licenses": [
+                        license_view(lic, today=today)
+                        for lic in await self.repo.licenses_of(str(p["id"]))
+                        if lic["review_status"] == "approved"
+                    ],
+                }
+            )
         return {
             "publishers": publishers,
+            "approved_publishers": approved,
             "licenses": [
                 license_view(lic, today=today)
                 for lic in await self.repo.pending_licenses()
@@ -1113,6 +1128,65 @@ class MarketAdmin:
                 await self.repo.keep_documents_until(
                     [found["document_id"]], now + timedelta(days=DOCUMENT_KEEP_DAYS)
                 )
+
+    async def revoke_publisher(
+        self, publisher_id: str, body: RevokeIn, reviewer: str
+    ) -> None:
+        """撤销审过的发布主体（证件伪造、资格没了）：即刻不算实名，公开的专家改回自用、
+        在架或在审的知识下架；现核的几处随即都不过（Fable 评审 P2-8）。卖家可改资料
+        重审。
+        """
+        found = await self.repo.get_publisher(publisher_id)
+        if found is None or found["review_status"] != "approved":
+            raise _missing("publisher")
+        async with self.repo.transaction():
+            await self.repo.review_publisher(
+                publisher_id,
+                review_status="revoked",
+                real_name_verified=False,
+                review_note=body.note,
+                reviewed_by=reviewer,
+                reviewed_at=self.now(),
+            )
+            await self._withdraw(found["id"], None, f"发布主体资格已撤销：{body.note}")
+
+    async def revoke_license(
+        self, license_id: str, body: RevokeIn, reviewer: str
+    ) -> None:
+        """撤销审过的证照：这个类目没有别的有效证照了，就把这个类目下公开的专家改回自用、
+        在架或在审的知识下架（Fable 评审 P2-8）。"""
+        found = await self.repo.get_license(license_id)
+        if found is None or found["review_status"] != "approved":
+            raise _missing("license")
+        async with self.repo.transaction():
+            await self.repo.review_license(
+                license_id,
+                review_status="revoked",
+                review_note=body.note,
+                reviewed_by=reviewer,
+                reviewed_at=self.now(),
+            )
+            if not await self.repo.has_valid_license(
+                found["publisher_id"], found["category"], self.now().date()
+            ):
+                await self._withdraw(
+                    found["publisher_id"], found["category"], f"资质已撤销：{body.note}"
+                )
+
+    async def _withdraw(
+        self, publisher_id: uuid.UUID, category: str | None, note: str
+    ) -> None:
+        for bot in await self.repo.public_experts_of(publisher_id, category):
+            await self.repo.update_knowbot(
+                bot["id"],
+                visibility="private",
+                listing_status="self",
+                listing_review_note=note[:2000],
+            )
+        for item in await self.repo.listed_by_publisher(publisher_id, category):
+            await self.repo.update_listing(
+                item["id"], status="delisted", review_note=note[:2000]
+            )
 
     async def decide_listing(
         self, listing_id: str, decision: ReviewDecision, reviewer: str

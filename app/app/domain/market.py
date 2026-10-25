@@ -221,6 +221,12 @@ class BuyIn(Strict):
     demand_id: str | None = Field(default=None, min_length=36, max_length=36)
 
 
+class RevokeIn(Strict):
+    """撤销审过的发布主体或证照：写明为什么（Fable 评审 P2-8）。"""
+
+    note: str = Field(min_length=1, max_length=2000)
+
+
 class ReviewDecision(Strict):
     """运营的审核结论：通过 / 不通过与理由。"""
 

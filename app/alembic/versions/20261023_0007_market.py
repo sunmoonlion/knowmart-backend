@@ -78,10 +78,19 @@ def upgrade() -> None:
     op.add_column("publisher", sa.Column("id_number_hash", sa.String(64)))
     op.add_column("publisher", sa.Column("legal_person", sa.String(100)))
     op.add_column("publisher", sa.Column("contact_name", sa.String(100)))
+    # 审过的可以撤销（发现证件伪造、资格没了）：撤销即刻生效（Fable 评审 P2-8）
     op.create_check_constraint(
         "ck_publisher_review_status",
         "publisher",
-        "review_status IN ('pending', 'approved', 'rejected')",
+        "review_status IN ('pending', 'approved', 'rejected', 'revoked')",
+    )
+    op.drop_constraint(
+        "ck_publisher_license_review_status", "publisher_license", type_="check"
+    )
+    op.create_check_constraint(
+        "ck_publisher_license_review_status",
+        "publisher_license",
+        "review_status IN ('pending', 'approved', 'rejected', 'revoked')",
     )
     op.create_table(
         "publisher_document",
@@ -377,6 +386,18 @@ def downgrade() -> None:
     op.drop_column("publisher_license", "document_id")
     op.drop_table("publisher_document")
     op.drop_constraint("ck_publisher_review_status", "publisher", type_="check")
+    op.execute(
+        "UPDATE publisher_license SET review_status = 'rejected'"
+        " WHERE review_status = 'revoked'"
+    )
+    op.drop_constraint(
+        "ck_publisher_license_review_status", "publisher_license", type_="check"
+    )
+    op.create_check_constraint(
+        "ck_publisher_license_review_status",
+        "publisher_license",
+        "review_status IN ('pending', 'approved', 'rejected')",
+    )
     for column in (
         "contact_name",
         "legal_person",

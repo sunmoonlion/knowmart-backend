@@ -40,6 +40,7 @@ from app.domain.market import (
     ResponseIn,
     ReviewDecision,
     ReviewIn,
+    RevokeIn,
     hash_id,
 )
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
@@ -731,6 +732,76 @@ async def test_a_seller_cannot_delete_what_is_up_and_a_lost_copy_ends_the_trade(
 
     fresh = await world.run(rebuy)  # 失败的不再被捞回，换键另起一笔
     assert fresh["trade_id"] != failed["trade_id"] and fresh["status"] == "done"
+
+
+async def test_an_approved_publisher_or_license_can_be_revoked(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    """撤销审过的主体、证照：即刻生效，公开的专家改回自用、知识下架（Fable P2-8）。"""
+    bot = (
+        await deliver(db, "delivery-0501", manifest(), ref="lab-bot-5", public=True)
+    ).knowbot_id
+    async with db() as session:
+        await session.execute(
+            text("update knowbot set category = :c where id = :i"),
+            {"c": "finance.securities_advisory", "i": bot},
+        )
+        await session.commit()
+    publisher_id = await approved_publisher(world)
+
+    async def go_up(svc: MarketService, admin: MarketAdmin) -> tuple[str, str]:
+        doc = await svc.add_document(SELLER, "license", "application/pdf", b"%PDF-1")
+        lic = await svc.add_license(
+            SELLER,
+            LicenseIn(
+                category="finance.securities_advisory",
+                license_name="许可证",
+                license_no="9",
+                valid_until=None,
+                document_id=doc["document_id"],
+            ),
+        )
+        await admin.decide_license(lic["license_id"], ReviewDecision(approve=True), OPS)
+        await svc.set_expert_listing(
+            SELLER, str(bot), ExpertListingIn(visibility="public")
+        )
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+        made = await svc.create_listing(SELLER, knowledge(), token)
+        await svc.submit_listing(SELLER, made["listing_id"])
+        await admin.decide_listing(
+            made["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        [shown] = (await admin.queue())["approved_publishers"]
+        assert [x["license_id"] for x in shown["licenses"]] == [lic["license_id"]]
+        return lic["license_id"], made["listing_id"]
+
+    license_id, listing_id = await world.run(go_up)
+
+    async def revoke_license(svc: MarketService, admin: MarketAdmin) -> None:
+        await admin.revoke_license(license_id, RevokeIn(note="证照伪造"), OPS)
+        found = await svc.repo.get_knowbot(str(bot))
+        assert (found["visibility"], found["listing_status"]) == ("private", "self")
+        assert "证照伪造" in found["listing_review_note"]
+        listing = await svc.repo.get_listing(listing_id)
+        assert listing["status"] == "listed"  # 不要证照的类目不受影响
+        with pytest.raises(NotFoundError):  # 撤过的不能再撤
+            await admin.revoke_license(license_id, RevokeIn(note="再来"), OPS)
+
+    await world.run(revoke_license)
+
+    async def revoke_publisher(svc: MarketService, admin: MarketAdmin) -> None:
+        await admin.revoke_publisher(publisher_id, RevokeIn(note="身份证伪造"), OPS)
+        listing = await svc.repo.get_listing(listing_id)
+        assert listing["status"] == "delisted"
+        mine = await svc.my_publisher(SELLER)
+        assert mine["publisher"]["review_status"] == "revoked"
+        with pytest.raises(BadRequestError) as refused:
+            await svc.submit_listing(SELLER, listing_id)
+        assert refused.value.code == "publisher_not_approved"
+        assert (await admin.queue())["approved_publishers"] == []
+
+    await world.run(revoke_publisher)
 
 
 async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:
