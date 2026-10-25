@@ -14,7 +14,7 @@ from __future__ import annotations
 import re
 import uuid
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -60,6 +60,13 @@ def _not_found() -> NotFoundError:
     return NotFoundError("No such expert", code="expert_not_found")
 
 
+def _seen_by(bot: KnowbotRecord, viewer: str) -> KnowbotRecord:
+    """别人看到的只有 knowlab 审成公开的那几版；主人看到全部（Fable 评审 P2-2）。"""
+    if bot.owner_subject == viewer:
+        return bot
+    return replace(bot, versions=tuple(v for v in bot.versions if v.public_allowed))
+
+
 def _latest(bot: KnowbotRecord) -> KnowbotVersionRecord | None:
     """最新的可用版；都停用了就是最新的一版（还能看，请不了）。"""
     active = [v for v in bot.versions if v.status == "active"]
@@ -82,9 +89,12 @@ class ExpertCatalog:
     async def _visible(self, owner_subject: str) -> Sequence[KnowbotRecord]:
         if not OWNER.fullmatch(owner_subject or ""):
             return []
-        return await self.repo.list_visible(
-            owner_subject, public_market=self.public_market, today=self.now().date()
-        )
+        return [
+            _seen_by(bot, owner_subject)
+            for bot in await self.repo.list_visible(
+                owner_subject, public_market=self.public_market, today=self.now().date()
+            )
+        ]
 
     def _matches(self, bot: KnowbotRecord, query: CatalogQuery) -> bool:
         latest = _latest(bot)
@@ -167,6 +177,7 @@ class ExpertCatalog:
             )
         if not owned and not (self.public_market and publisher is not None):
             raise _not_found()
+        bot = _seen_by(bot, owner_subject)
         if version is not None:
             if not VERSION.fullmatch(version):
                 raise _not_found()

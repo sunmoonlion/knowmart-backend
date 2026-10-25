@@ -62,10 +62,17 @@ async def db():
         await engine.dispose()
 
 
-async def deliver(db, delivery: str, doc: dict, ref: str = "lab-bot-1"):
+async def deliver(
+    db, delivery: str, doc: dict, ref: str = "lab-bot-1", *, public: bool = False
+):
+    """public：knowlab 运营把这一版审成了公开（Fable 评审 P2-2）。"""
     async with db() as session:
         return await KnowbotService(SqlKnowbotRepository(session)).deliver(
-            delivery_id=delivery, owner_subject=OWNER, knowbot_ref=ref, manifest=doc
+            delivery_id=delivery,
+            owner_subject=OWNER,
+            knowbot_ref=ref,
+            manifest=doc,
+            request_public=public,
         )
 
 
@@ -147,6 +154,7 @@ async def test_catalog_visibility_in_sql(db) -> None:
             owner_subject=other,
             knowbot_ref="lab-theirs",
             manifest=manifest(name="别人的公开专家"),
+            request_public=True,
         )
         # 公开必须有发布主体（数据库约束兜底）
         with pytest.raises(DBAPIError):
@@ -298,3 +306,25 @@ async def test_unlisted_outcomes_on_the_real_database(db) -> None:
             await session.execute(
                 text("UPDATE knowbot_unlisted_version SET outcome = 'stopped'")
             )
+
+
+@pytest.mark.asyncio
+async def test_versions_before_0008_stay_public_as_before(db) -> None:
+    """0008 之前交付的版本回填为能公开（照原来的规矩看专家整体），之后的默认不能
+    （Fable 评审 P2-2）。"""
+    first = await deliver(db, "delivery-0801", manifest(), ref="knowlab-old")
+    name = "20261024_0008_unlisted_versions"
+    async with db() as session, session.begin():
+        connection = await session.connection()
+        await connection.run_sync(_step(name, "downgrade"))
+        await connection.run_sync(_step(name, "upgrade"))
+    await deliver(db, "delivery-0802", manifest("2"), ref="knowlab-old")
+    async with db() as session:
+        rows = await session.execute(
+            text(
+                "select version, public_allowed from knowbot_version"
+                " where knowbot_id = :i order by version"
+            ),
+            {"i": first.knowbot_id},
+        )
+        assert [tuple(r) for r in rows] == [("1", True), ("2", False)]

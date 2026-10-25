@@ -174,6 +174,8 @@ class KnowbotVersion(Base):
     delivered_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+    # knowlab 运营把这一版审成「公开」的才给别人看、给别人请（Fable 评审 P2-2）
+    public_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     __table_args__ = (
         UniqueConstraint("delivery_id", name="uq_knowbot_version_delivery_id"),

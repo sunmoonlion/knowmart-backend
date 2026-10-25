@@ -240,7 +240,7 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
     world: World,
     db,  # noqa: F811
 ) -> None:
-    bot = (await deliver(db, "delivery-0101", manifest())).knowbot_id
+    bot = (await deliver(db, "delivery-0101", manifest(), public=True)).knowbot_id
     async with db() as session:
         await session.execute(
             text("update knowbot set category = :c where id = :i"),
@@ -539,7 +539,9 @@ async def test_a_licensed_expert_still_needs_an_approved_publisher(
     db,  # noqa: F811
 ) -> None:
     """有证照的类目也要主体审过；证照过期不等每天扫表就请不了（Astra 评审 F06）。"""
-    bot = (await deliver(db, "delivery-0301", manifest(), ref="lab-bot-3")).knowbot_id
+    bot = (
+        await deliver(db, "delivery-0301", manifest(), ref="lab-bot-3", public=True)
+    ).knowbot_id
     async with db() as session:
         await session.execute(
             text("update knowbot set category = :c where id = :i"),

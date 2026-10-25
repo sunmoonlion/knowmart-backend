@@ -25,6 +25,7 @@ class KnowbotVersionRecord:
     delivery_id: str
     delivered_at: datetime
     manifest: dict[str, Any] = field(repr=False)
+    public_allowed: bool = False  # knowlab 把这一版审成公开（Fable 评审 P2-2）
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ class KnowbotRepository(Protocol):
         digest: str,
         manifest: dict[str, Any],
         delivery_id: str,
+        public_allowed: bool = False,
     ) -> KnowbotVersionRecord: ...
 
     async def set_current(

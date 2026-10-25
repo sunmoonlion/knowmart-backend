@@ -44,6 +44,9 @@ def make_public(repo, bot_id, *, category="finance.securities_advisory", **licen
     repo.bots[bot_id].update(
         visibility="public", publisher_id=publisher, category=category
     )
+    for key, v in list(repo.versions.items()):  # knowlab 把这几版审成了公开
+        if key[0] == bot_id:
+            repo.versions[key] = replace(v, public_allowed=True)
     repo.licenses.append(
         {
             "publisher_id": publisher,
@@ -333,3 +336,46 @@ def test_the_detail_page_says_what_data_you_bring() -> None:
             "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_version_reviewed_for_self_use_stays_with_its_owner() -> None:
+    """knowlab 把第 1 版审成公开、第 2 版审成自用：别人看到、请到的是第 1 版，第 2 版
+    只给主人（Fable 评审 P2-2）。"""
+    repo = MemoryKnowbots()
+    svc = KnowbotService(repo, public_market=True, now=lambda: NOW)
+    first = await svc.deliver(
+        delivery_id="knowlab-expert-1",
+        owner_subject=ME,
+        knowbot_ref="knowlab-r9",
+        manifest=manifest("1"),
+        request_public=True,
+    )
+    make_public(repo, first.knowbot_id)
+    await svc.deliver(
+        delivery_id="knowlab-expert-2",
+        owner_subject=ME,
+        knowbot_ref="knowlab-r9",
+        manifest=manifest("2"),
+    )
+    theirs = await catalog(repo, public_market=True).detail(
+        OTHER, str(first.knowbot_id)
+    )
+    assert theirs["version"] == "1"
+    assert [v["version"] for v in theirs["versions"]] == ["1"]
+    mine = await catalog(repo, public_market=True).detail(ME, str(first.knowbot_id))
+    assert mine["version"] == "2"
+    with pytest.raises(NotFoundError):
+        await svc.summon(
+            owner_subject=OTHER,
+            knowbot_id=str(first.knowbot_id),
+            version="2",
+            runtime="knowbench",
+        )
+    got = await svc.summon(
+        owner_subject=OTHER,
+        knowbot_id=str(first.knowbot_id),
+        version="1",
+        runtime="knowbench",
+    )
+    assert got.version.version == "1"

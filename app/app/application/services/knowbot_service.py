@@ -84,7 +84,13 @@ class KnowbotService:
         owner_subject: str,
         knowbot_ref: str,
         manifest: object,
+        request_public: bool = False,
     ) -> DeliveryResult:
+        """knowlab 交一版。
+
+        request_public：那边运营把这一版审成「公开」，只有这样的版本才给别人看、给别人
+        请；审成自用的只给主人（Fable 评审 P2-2）。
+        """
         _require(DELIVERY_ID, delivery_id, "delivery_id")
         _require(OWNER, owner_subject, "owner_subject")
         _require(SOURCE_REF, knowbot_ref, "knowbot_ref")
@@ -137,6 +143,7 @@ class KnowbotService:
                 digest=digest,
                 manifest=parsed.canonical(),
                 delivery_id=delivery_id,
+                public_allowed=request_public,
             )
             if bot.current_version is None or int(parsed.version) > int(
                 bot.current_version
@@ -181,6 +188,8 @@ class KnowbotService:
         found = await self.repo.get_version(bot.id, version)
         if found is None or found.status != "active":
             raise _not_found()
+        if bot.owner_subject != owner_subject and not found.public_allowed:
+            raise _not_found()  # 审成自用的那一版只给主人（Fable 评审 P2-2）
         if found.manifest.get("runtime") != runtime:
             raise _not_found()
         return SummonedVersion(

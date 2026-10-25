@@ -41,6 +41,7 @@ def _version(row: KnowbotVersion) -> KnowbotVersionRecord:
         delivery_id=row.delivery_id,
         delivered_at=row.delivered_at,
         manifest=row.manifest,
+        public_allowed=row.public_allowed,
     )
 
 
@@ -153,6 +154,7 @@ class SqlKnowbotRepository:
         digest: str,
         manifest: dict[str, Any],
         delivery_id: str,
+        public_allowed: bool = False,
     ) -> KnowbotVersionRecord:
         row = KnowbotVersion(
             knowbot_id=knowbot_id,
@@ -161,6 +163,7 @@ class SqlKnowbotRepository:
             manifest=manifest,
             delivery_id=delivery_id,
             status="active",
+            public_allowed=public_allowed,
         )
         self.session.add(row)
         await self.session.flush()
@@ -211,11 +214,17 @@ class SqlKnowbotRepository:
                 PublisherLicense.category == Knowbot.category,
                 _license_valid(today),
             )
+            # 至少有一版是 knowlab 审成公开的（Fable 评审 P2-2）
+            shown = exists().where(
+                KnowbotVersion.knowbot_id == Knowbot.id,
+                KnowbotVersion.public_allowed.is_(True),
+            )
             visible = or_(
                 visible,
                 and_(
                     Knowbot.visibility == "public",
                     approved,
+                    shown,
                     or_(Knowbot.category.in_(NO_LICENSE_CATEGORIES), licensed),
                 ),
             )

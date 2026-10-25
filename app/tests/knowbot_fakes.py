@@ -115,6 +115,7 @@ class MemoryKnowbots:
         digest: str,
         manifest: dict[str, Any],
         delivery_id: str,
+        public_allowed: bool = False,
     ) -> KnowbotVersionRecord:
         record = KnowbotVersionRecord(
             knowbot_id=knowbot_id,
@@ -124,6 +125,7 @@ class MemoryKnowbots:
             delivery_id=delivery_id,
             delivered_at=datetime.now(UTC),
             manifest=manifest,
+            public_allowed=public_allowed,
         )
         self.versions[(knowbot_id, version)] = record
         return record
@@ -183,6 +185,11 @@ class MemoryKnowbots:
             public = (
                 public_market
                 and bot.get("visibility") == "public"
+                and any(
+                    v.public_allowed
+                    for (k, _), v in self.versions.items()
+                    if k == bot["id"]
+                )
                 and self._qualified(
                     bot.get("publisher_id"), bot.get("category", "uncategorized"), today
                 )

@@ -101,6 +101,7 @@ async def deliver(
         owner_subject=body.owner_subject,
         knowbot_ref=body.knowbot_ref,
         manifest=body.manifest,
+        request_public=bool(body.request_public),
     )
     content: dict[str, Any] = {
         "contract_version": CONTRACT_VERSION,
