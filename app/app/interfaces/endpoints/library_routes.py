@@ -7,18 +7,27 @@ knowbase 复制一份给买家，卖家删了不影响已卖出的。
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors.exceptions import AppException
+from app.application.services.market import listed_with_item
+from app.domain.security import Principal
 from app.infrastructure.external.knowbase_user_data import (
     KnowbaseRefused,
     KnowbaseUserData,
 )
-from app.interfaces.http.middleware.auth import get_web_knowbase_token
+from app.infrastructure.repositories.market import SqlMarketRepository
+from app.infrastructure.storage.postgres import get_db_session
+from app.interfaces.http.middleware.auth import (
+    get_web_current_user,
+    get_web_knowbase_token,
+)
 
 CONTRACT_VERSION = 1
 NO_STORE = {"Cache-Control": "no-store"}
@@ -36,8 +45,20 @@ def get_knowbase() -> KnowbaseUserData:
     return _client
 
 
+def get_listed_check(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> Callable[[str, str], Awaitable[bool]]:
+    """（卖家, 资料编号）→ 待审、在架的条目里还有没有这份。"""
+    repo = SqlMarketRepository(session)
+    return lambda seller, item_id: listed_with_item(repo, seller, item_id)
+
+
 Token = Annotated[str, Depends(get_web_knowbase_token)]
 Knowbase = Annotated[KnowbaseUserData, Depends(get_knowbase)]
+User = Annotated[Principal, Depends(get_web_current_user)]
+ListedCheck = Annotated[
+    Callable[[str, str], Awaitable[bool]], Depends(get_listed_check)
+]
 
 
 def _refused(exc: KnowbaseRefused) -> AppException:
@@ -109,8 +130,20 @@ async def library_download(item_id: str, token: Token, knowbase: Knowbase) -> Re
 
 
 @router.delete("/library/{item_id}", status_code=204)
-async def library_delete(item_id: str, token: Token, knowbase: Knowbase) -> Response:
-    """删了不影响已卖出的：买家那份是复制的。"""
+async def library_delete(
+    item_id: str,
+    token: Token,
+    knowbase: Knowbase,
+    user: User,
+    listed: ListedCheck,
+) -> Response:
+    """删了不影响已卖出的：买家那份是复制的。
+
+    待审、在架的条目里还有这份就不让删，先下架那条：不然正在买的人只拿到半份
+    （Fable 评审 P1-2）。
+    """
+    if await listed(user.subject, item_id):
+        raise AppException(code="item_listed", status_code=409, msg="item_listed")
     try:
         await knowbase.delete(token, item_id)
     except KnowbaseRefused as exc:

@@ -108,6 +108,15 @@ async def still_qualified(
     )
 
 
+async def listed_with_item(repo: MarketRepository, seller: str, item_id: str) -> bool:
+    """卖家的待审、在架条目里还有这份资料（删之前先下架那条，Fable 评审 P1-2）。"""
+    return any(
+        listing["status"] in ("pending", "listed")
+        and any(str(i.get("item_id")) == item_id for i in listing["items"] or [])
+        for listing in await repo.listings_of(seller)
+    )
+
+
 def _buy_digest(listing_id: str, body: BuyIn) -> str:
     """一次购买的参数摘要：同一个幂等键只认同样的参数。"""
     raw = json.dumps(
@@ -565,13 +574,18 @@ class MarketService:
         for n, item in enumerate(trade["planned"]):
             if n < len(trade["copied"]):
                 continue
-            got = await vault.purchase(
-                seller=trade["seller_subject"],
-                seller_item_id=str(item["seller_item_id"]),
-                buyer=trade["buyer_subject"],
-                buyer_app=trade["target_app"],
-                transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
-            )
+            try:
+                got = await vault.purchase(
+                    seller=trade["seller_subject"],
+                    seller_item_id=str(item["seller_item_id"]),
+                    buyer=trade["buyer_subject"],
+                    buyer_app=trade["target_app"],
+                    transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
+                )
+            except NotFoundError as exc:
+                if exc.code != "item_gone":
+                    raise
+                return await self._fail(trade["id"], "item_gone")
             async with self.repo.transaction():
                 trade = await self._locked_trade(trade["id"])
                 if len(trade["copied"]) == n:  # 并发重来的那一个已经记了就不再记
@@ -593,6 +607,16 @@ class MarketService:
                 if trade["demand_id"] is not None:
                     await self.repo.update_demand(trade["demand_id"], status="closed")
                 trade = {**trade, "status": "done"}
+        return trade
+
+    async def _fail(self, trade_id: uuid.UUID, reason: str) -> Row:
+        """卖家那份没了，复制不下去：这笔记成终态失败、照实告诉买家，不再接手（Fable
+        评审 P1-2）。已复制进买家知识库的那几份照旧归他。"""
+        async with self.repo.transaction():
+            trade = await self._locked_trade(trade_id)
+            if trade["status"] == "copying":
+                await self.repo.update_trade(trade_id, status="failed", failure=reason)
+                trade = {**trade, "status": "failed", "failure": reason}
         return trade
 
     async def _locked_trade(self, trade_id: uuid.UUID) -> Row:
@@ -1409,6 +1433,7 @@ def trade_view(t: Row, *, viewer: str | None) -> Row:
         ],
         "demand_id": str(t["demand_id"]) if t["demand_id"] else None,
         "status": t["status"],
+        "failure": t.get("failure"),
         "created_at": _iso(t["created_at"]),
     }
     if viewer is not None:

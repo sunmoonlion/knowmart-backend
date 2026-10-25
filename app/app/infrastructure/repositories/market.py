@@ -607,7 +607,7 @@ class SqlMarketRepository:
         offset: int = 0,
         copying: bool = False,
     ) -> list[dict[str, Any]]:
-        where = [] if copying else [Trade.status == "done"]
+        where = [] if copying else [Trade.status != "copying"]
         if buyer is not None:
             where.append(Trade.buyer_subject == buyer)
         if seller is not None:

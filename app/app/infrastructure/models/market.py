@@ -135,6 +135,7 @@ class Trade(Base):
     planned: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
     )
+    failure: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = _now()
 
 

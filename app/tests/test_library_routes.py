@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -77,6 +79,16 @@ def api():
 
     app.dependency_overrides[library.get_web_knowbase_token] = token
     app.dependency_overrides[library.get_knowbase] = lambda: knowbase
+    app.dependency_overrides[library.get_web_current_user] = lambda: SimpleNamespace(
+        subject="seller-1"
+    )
+    listed: set[tuple[str, str]] = set()
+    state["listed"] = listed
+
+    async def check(seller: str, item_id: str) -> bool:
+        return (seller, item_id) in listed
+
+    app.dependency_overrides[library.get_listed_check] = lambda: check
     client = httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://mart"
     )
@@ -135,3 +147,12 @@ async def test_sign_in_again_and_unconfigured_reach_the_page(api):
     state["token"] = ServiceUnavailableError("x", code="knowbase_unconfigured")
     answer = await client.get(BASE)
     assert (answer.status_code, answer.json()["code"]) == (503, "knowbase_unconfigured")
+
+
+async def test_what_is_up_for_sale_is_delisted_before_it_is_deleted(api) -> None:
+    """待审、在架的条目里还有这份：不让删，先下架（Fable 评审 P1-2）。"""
+    client, knowbase, state = api
+    state["listed"].add(("seller-1", "i1"))  # type: ignore[union-attr]
+    refused = await client.delete("/api/web/v1/knowmart/library/i1")
+    assert (refused.status_code, refused.json()["code"]) == (409, "item_listed")
+    assert not any(c[0] == "delete" for c in knowbase.calls)

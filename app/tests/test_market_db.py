@@ -21,7 +21,11 @@ from app.application.errors.exceptions import (
     ServiceUnavailableError,
 )
 from app.application.services.knowbot_service import KnowbotService
-from app.application.services.market import MarketAdmin, MarketService
+from app.application.services.market import (
+    MarketAdmin,
+    MarketService,
+    listed_with_item,
+)
 from app.domain.market import (
     BuyIn,
     DemandIn,
@@ -72,6 +76,7 @@ class Vault:
         self.purchases: list[dict[str, Any]] = []
         self.copies: dict[str, str] = {}  # 成交编号 → 复制出来的那份
         self.fail_on: list[str] = []  # 复制这几份时依次失败一次
+        self.gone: set[str] = set()  # 卖家删了的
 
     async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
         if item_id not in self.items:
@@ -83,6 +88,8 @@ class Vault:
         if kw["seller_item_id"] in self.fail_on:
             self.fail_on.remove(kw["seller_item_id"])
             raise ServiceUnavailableError("knowbase down", code="knowbase_unavailable")
+        if kw["seller_item_id"] in self.gone:
+            raise NotFoundError("gone", code="item_gone")
         source = self.items[kw["seller_item_id"]]
         if kw["transaction_ref"] not in self.copies:
             self.purchases.append(kw)
@@ -632,6 +639,56 @@ async def test_buying_resumes_where_it_stopped(world: World) -> None:
         assert len(await svc.my_trades(BUYER, "buyer")) == 3
 
     await world.run(tally)
+
+
+async def test_a_seller_cannot_delete_what_is_up_and_a_lost_copy_ends_the_trade(
+    world: World,
+) -> None:
+    """在架条目里的资料不让删；卖家那份还是没了，这笔记失败、照实说，可以再买
+    （Fable 评审 P1-2）。"""
+    await approved_publisher(world)
+
+    async def listed(svc: MarketService, admin: MarketAdmin) -> str:
+        made = await svc.create_listing(
+            SELLER, knowledge(items=[{"item_id": "d1"}, {"item_id": "d2"}]), token
+        )
+        assert not await listed_with_item(svc.repo, SELLER, "d2")  # 草稿不算
+        await svc.submit_listing(SELLER, made["listing_id"])
+        await admin.decide_listing(
+            made["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        assert await listed_with_item(svc.repo, SELLER, "d2")
+        assert not await listed_with_item(svc.repo, OTHER, "d2")
+        return made["listing_id"]
+
+    listing_id = await world.run(listed)
+    world.vault.gone = {"d2"}
+
+    async def buy(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await svc.buy(
+            BUYER, listing_id, BuyIn(request_id="gone-0001", target_app="knowbench")
+        )
+
+    failed = await world.run(buy)
+    assert (failed["status"], failed["failure"]) == ("failed", "item_gone")
+    assert [c["item_id"] for c in failed["copied"]] == ["copy-1"]  # 已复制的照旧归他
+    again = await world.run(buy)  # 同键重来：还是那一笔，不再接手
+    assert again["trade_id"] == failed["trade_id"] and again["status"] == "failed"
+
+    async def mine(svc: MarketService, admin: MarketAdmin) -> None:
+        [shown] = await svc.my_trades(BUYER, "buyer")
+        assert shown["status"] == "failed"
+
+    await world.run(mine)
+    world.vault.gone = set()
+
+    async def rebuy(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await svc.buy(
+            BUYER, listing_id, BuyIn(request_id="gone-0002", target_app="knowbench")
+        )
+
+    fresh = await world.run(rebuy)  # 失败的不再被捞回，换键另起一笔
+    assert fresh["trade_id"] != failed["trade_id"] and fresh["status"] == "done"
 
 
 async def test_a_demand_gets_responses_and_the_buyer_chooses_one(world: World) -> None:

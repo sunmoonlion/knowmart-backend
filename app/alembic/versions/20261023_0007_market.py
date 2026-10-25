@@ -248,9 +248,13 @@ def upgrade() -> None:
         sa.Column("request_key", sa.String(64)),
         sa.Column("request_digest", sa.String(64)),
         sa.Column("planned", pg.JSONB(), nullable=False, server_default="[]"),
+        # 卖家那份没了、复制不下去：终态 failed，记原因（Fable 评审 P1-2）
+        sa.Column("failure", sa.String(64)),
         _created(),
         sa.CheckConstraint("kind IN ('expert', 'knowledge')", name="ck_trade_kind"),
-        sa.CheckConstraint("status IN ('copying', 'done')", name="ck_trade_status"),
+        sa.CheckConstraint(
+            "status IN ('copying', 'done', 'failed')", name="ck_trade_status"
+        ),
         sa.CheckConstraint(
             "target_app IS NULL OR target_app IN ('knowbench', 'knowlab')",
             name="ck_trade_target_app",
