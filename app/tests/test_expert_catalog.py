@@ -16,7 +16,7 @@ from app.application.services.expert_catalog import (
 )
 from app.application.services.knowbot_service import KnowbotService
 from app.domain.knowbots.catalog import expert_sections
-from tests.knowbot_fakes import MemoryKnowbots, manifest
+from tests.knowbot_fakes import MemoryKnowbots, manifest, manifest_v2
 
 ME = "user-me"
 OTHER = "user-other"
@@ -293,6 +293,7 @@ def test_sections_read_what_the_manifest_has() -> None:
     assert owner["data"] == {
         "bundled": [{"dataset_id": "ds-600519", "version": "3"}],
         "needs": [],
+        "bound_count": 0,
         "accepts_user_data": False,
     }
     assert owner["delivers"] == [{"step": "成稿", "file": "底稿/成稿.md"}]
@@ -336,6 +337,23 @@ def test_the_detail_page_says_what_data_you_bring() -> None:
             "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
         }
     ]
+    assert data["bound_count"] == 0
+
+
+def test_a_v2_manifest_shows_type_period_reading_and_how_many_bound() -> None:
+    data = expert_sections(manifest_v2(), owner=False)["data"]
+    need = data["needs"][0]
+    assert (need["doc_type"], need["reading"]) == ("annual_report", "table")
+    assert need["period"] == {
+        "kind": "latest",
+        "start": None,
+        "end": None,
+        "count": 3,
+        "disclosed_by_task_date": False,
+    }
+    # 作者绑的数据只说有几份，不列资料编号
+    assert data["bound_count"] == 1 and data["bundled"] == []
+    assert "m-1" not in str(data)
 
 
 @pytest.mark.asyncio

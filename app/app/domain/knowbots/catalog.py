@@ -125,9 +125,30 @@ def data_needs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                     for t in tables
                 ],
+                # 清单 v2 才有的：类型、期间规则、要的读法（SDD 0043 第 3.1 节）
+                **_v2_need(n),
             }
         )
     return needs
+
+
+def _v2_need(n: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(n.get("doc_type"), str):
+        return {}
+    period = _dict(n.get("period"))
+    return {
+        "doc_type": _text(n.get("doc_type"), 32),
+        "period": {
+            "kind": _text(period.get("kind"), 8),
+            "start": _text(period.get("start"), 10) or None,
+            "end": _text(period.get("end"), 10) or None,
+            "count": period.get("count")
+            if isinstance(period.get("count"), int)
+            else None,
+            "disclosed_by_task_date": period.get("disclosed_by_task_date") is True,
+        },
+        "reading": _text(n.get("reading"), 16) or "original",
+    }
 
 
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
@@ -159,6 +180,10 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
             ],
             # 写了数据需求声明的（新格式）：请它时按这几样从自己的知识库选
             "needs": data_needs(manifest),
+            # 清单 v2：作者绑的数据留在 knowbase，这里只说有几份（不给浏览、下载入口）
+            "bound_count": len(
+                [b for b in manifest.get("bindings") or [] if isinstance(b, dict)]
+            ),
             "accepts_user_data": accepts_user_data(manifest),
         },
         "delivers": [

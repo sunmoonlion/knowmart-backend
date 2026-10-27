@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.knowbots.schema import render
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import manifest, manifest_v2
 
 CONTRACT_DIR = Path(__file__).resolve().parents[3] / "contracts/knowbot/v1"
 SCHEMA = CONTRACT_DIR / "knowbot-manifest.schema.json"
@@ -41,3 +41,25 @@ def test_example_manifest_satisfies_the_published_schema() -> None:
     _require_contract()
     jsonschema = pytest.importorskip("jsonschema")
     jsonschema.validate(manifest(), json.loads(SCHEMA.read_text(encoding="utf-8")))
+
+
+V2_DIR = CONTRACT_DIR.parent / "v2"
+V2_SCHEMA = V2_DIR / "knowbot-manifest.schema.json"
+
+
+def test_v2_schema_file_is_generated_from_the_model() -> None:
+    _require_contract()
+    assert V2_SCHEMA.read_text(encoding="utf-8") == render(2), (
+        "regenerate: python -m app.domain.knowbots.schema 2 > "
+        "../../contracts/knowbot/v2/knowbot-manifest.schema.json"
+    )
+    release = json.loads((V2_DIR / "contract-manifest.json").read_text())
+    assert (release["contract"], release["major_version"]) == ("knowbot-manifest", 2)
+    assert release["sha256"] == hashlib.sha256(V2_SCHEMA.read_bytes()).hexdigest()
+
+
+def test_example_v2_manifest_satisfies_the_published_schema() -> None:
+    _require_contract()
+    jsonschema = pytest.importorskip("jsonschema")
+    schema = json.loads(V2_SCHEMA.read_text(encoding="utf-8"))
+    jsonschema.validate(manifest_v2(), schema)

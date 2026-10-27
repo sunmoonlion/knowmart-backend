@@ -43,6 +43,46 @@ def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
     return doc
 
 
+def manifest_v2(version: str = "1", **overrides: Any) -> dict[str, Any]:
+    """清单 v2：数据需求声明 v2，作者绑的数据只带冻结的引用。"""
+    doc: dict[str, Any] = {
+        "schema": "knowbot-manifest/v2",
+        "name": "财务分析与预测",
+        "tagline": "按我的方法分析一家公司的财报",
+        "version": version,
+        "runtime": "knowbench",
+        "pack": {
+            "pack_id": "fin-forecast",
+            "version": version,
+            "workflow": [{"step_id": "s1", "title": "读财报"}],
+        },
+        "data_needs": [
+            {
+                "key": "annual",
+                "name": "年报",
+                "doc_type": "annual_report",
+                "period": {"kind": "latest", "count": 3},
+                "formats": ["pdf"],
+                "reading": "table",
+                "priority": "public_first",
+            }
+        ],
+        "bindings": [
+            {
+                "material_id": "m-1",
+                "version_no": 2,
+                "sha256": "b" * 64,
+                "basis_ref": "expert:fa-1@2",
+            }
+        ],
+        "rule_sources": [
+            {"rule": "毛利率口径", "source": "user_text", "ref": "想法原文第 2 段"}
+        ],
+    }
+    doc.update(overrides)
+    return doc
+
+
 class MemoryKnowbots:
     def __init__(self) -> None:
         self.bots: dict[uuid.UUID, dict[str, Any]] = {}
