@@ -12,19 +12,104 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 DocType = Literal[
+    "disclosure",
+    "research",
+    "news",
+    "briefing",
+    "policy",
+    "statistics",
+    "other",
     "annual_report",
     "semiannual_report",
     "q1_report",
     "q3_report",
-    "announcement",
+    "interim_announcement",
     "prospectus",
-    "policy",
-    "statistics",
+    "listing_announcement",
+    "ir_activity",
+    "ir_qa",
+    "research_morning",
+    "research_macro",
+    "research_strategy",
+    "research_industry",
+    "research_company",
+    "research_quant",
+    "research_market",
+    "research_fixed_income",
+    "research_commodity",
+    "research_derivatives",
+    "research_fund",
+    "research_fx",
+    "research_reits",
+    "research_esg",
+    "research_other",
+    "financial_news",
+    "recommended_news",
+    "negative_news",
+    "brief",
+    "law",
+    "administrative_regulation",
+    "departmental_rule",
+    "normative_document",
+    "local_regulation",
+    "judicial_interpretation",
+    "policy_interpretation",
+    "business_rule",
+    "regulatory_letter",
+    "statistical_bulletin",
+    "statistical_data",
+    "census",
     "webpage",
     "other_table",
     "other_text",
 ]
 DataFormat = Literal["pdf", "excel", "csv", "text", "markdown", "html"]
+Edition = Literal["full", "summary", "english"]
+Topic = Literal[
+    "results",
+    "ipo",
+    "refinancing",
+    "dividend",
+    "meetings",
+    "governance",
+    "operations",
+    "restructuring",
+    "equity",
+    "trading",
+    "intermediary",
+    "supervision",
+]
+Industry = Literal[
+    "石油石化",
+    "煤炭",
+    "有色金属",
+    "电力及公用事业",
+    "钢铁",
+    "基础化工",
+    "建筑",
+    "建材",
+    "轻工制造",
+    "机械",
+    "电力设备",
+    "国防军工",
+    "汽车",
+    "商贸零售",
+    "消费者服务",
+    "家电",
+    "纺织服装",
+    "医药",
+    "食品饮料",
+    "农林牧渔",
+    "银行",
+    "非银行金融",
+    "房地产",
+    "交通运输",
+    "电子元器件",
+    "通信",
+    "计算机",
+    "传媒",
+    "综合",
+]
 
 
 class _Strict(BaseModel):
@@ -41,19 +126,23 @@ class DataTable(_Strict):
 
 
 class PeriodRule(_Strict):
-    """固定期间（start、end），最近 N 个完整的报告期（count，可加截至任务日期已披露），
-    或不限期间（none，只给不是定期报告的）。"""
+    """固定期间（start、end）；定期报告最近 N 个完整的报告期（latest + count，
+    可加截至任务日期已披露）；其余类型最近 N 个月内披露的（recent + months），
+    或不限期间（none）。定期报告的期间是报告期，其余类型的期间是披露时间窗
+    （SDD 0049）。"""
 
-    kind: Literal["fixed", "latest", "none"]
+    kind: Literal["fixed", "latest", "recent", "none"]
     start: date | None = None
     end: date | None = None
     count: int | None = Field(default=None, ge=1, le=10)
     disclosed_by_task_date: bool = False
+    months: int | None = Field(default=None, ge=1, le=60)
 
 
 class DataNeed(_Strict):
-    """声明模板里的一样：类型、期间规则、格式、份数、必填、要的读法、来源限制、
-    多候选时的优先策略、表格类的表与列；口径与说明只展示。"""
+    """声明模板里的一样：类型（细类，或只写大类）、期间规则、版本形态、格式、份数、
+    必填、要的读法、来源限制、多候选时的优先策略、表格类的表与列；事项与行业写了就是
+    缩小范围；口径与说明只展示。"""
 
     key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,39}$")
     name: str = Field(min_length=1, max_length=80)
@@ -71,3 +160,6 @@ class DataNeed(_Strict):
     tables: tuple[DataTable, ...] = Field(default=(), max_length=20)
     caliber: str | None = Field(default=None, max_length=200)
     description: str = Field(default="", max_length=500)
+    edition: Edition = "full"
+    topics: tuple[Topic, ...] = Field(default=(), max_length=12)
+    industry: Industry | None = None
