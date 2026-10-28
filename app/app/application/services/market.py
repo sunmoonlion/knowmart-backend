@@ -110,20 +110,9 @@ async def still_qualified(
     )
 
 
-async def listed_with_item(repo: MarketRepository, seller: str, item_id: str) -> bool:
-    """卖家的待审、在架条目里还有这份资料（删之前先下架那条，Fable 评审 P1-2）。"""
-    return any(
-        listing["status"] in ("pending", "listed")
-        and any(str(i.get("item_id")) == item_id for i in listing["items"] or [])
-        for listing in await repo.listings_of(seller)
-    )
-
-
 def _buy_digest(listing_id: str, body: BuyIn) -> str:
     """一次购买的参数摘要：同一个幂等键只认同样的参数。"""
-    raw = json.dumps(
-        [str(listing_id), body.target_app, body.demand_id], separators=(",", ":")
-    )
+    raw = json.dumps([str(listing_id), body.demand_id], separators=(",", ":"))
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -536,12 +525,13 @@ class MarketService:
         }
 
     async def buy(self, subject: str, listing_id: str, body: BuyIn) -> Row:
-        """买知识：复制一份进买家选的知识库（knowbench 云端或 knowlab），记一笔成交。
+        """买知识：记一笔成交，请 knowbase 给买家逐份建使用权（只到成交那一版，不复制；
+        SDD 0043 第 4.3 节），资料进买家总栏的「买来的」。
 
-        可恢复（Astra 评审 F07）：先落一笔「复制中」（要复制的几份、成交编号定下来），
-        逐份复制、逐份记下，都复制完才算成交。同一个 request_id 重来接着做那一笔；换了
-        键但同样参数、上一笔还没复制完的，也接着做那一笔；同一个键参数不同就拒。knowbase
-        按成交编号与序号幂等复制，重来不会多出副本。
+        可恢复（Astra 评审 F07）：先落一笔「办理中」（状态仍叫 copying：要建的几份、
+        成交编号定下来），逐份建、逐份记下，都建好才算成交。同一个 request_id 重来接着做
+        那一笔；换了键但同样参数、上一笔还没办完的，也接着做那一笔；同一个键参数不同就拒。
+        knowbase 按买家、资料与交易编号幂等，重来不会多出使用权。
         """
         digest = _buy_digest(listing_id, body)
         trade = await self.repo.trade_by_request(subject, body.request_id)
@@ -588,7 +578,8 @@ class MarketService:
                     "listing_ref": str(listing["id"]),
                     "title": listing["title"],
                     "price": listing["price"],
-                    "target_app": body.target_app,
+                    # 资料不再按应用分区（user-data/v2），新成交不记放进哪个应用
+                    "target_app": None,
                     "copied": [],
                     "demand_id": demand_id,
                     "status": "copying",
@@ -607,7 +598,7 @@ class MarketService:
             )
 
     async def _copy(self, trade: Row) -> Row:
-        """接着复制没复制完的，逐份记下；都复制完记成交、关掉需求。"""
+        """接着建没建完的使用权，逐份记下（字段仍叫 copied）；都建好记成交、关需求。"""
         vault = self._need_vault()
         for n, item in enumerate(trade["planned"]):
             if n < len(trade["copied"]):
@@ -615,16 +606,16 @@ class MarketService:
             try:
                 got = await vault.purchase(
                     seller=trade["seller_subject"],
-                    seller_item_id=str(item["seller_item_id"]),
+                    material_id=str(item["seller_item_id"]),
                     buyer=trade["buyer_subject"],
-                    buyer_app=trade["target_app"],
                     transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
-                    no_resale=trade["resale_allowed"] is not True,
+                    resale_allowed=trade["resale_allowed"] is True,
                 )
-            except NotFoundError as exc:
-                if exc.code != "item_gone":
+            except (NotFoundError, ConcurrencyConflictError) as exc:
+                # 卖家那份没了、或上架后把许可改低了：这一笔办不下去
+                if exc.code not in ("item_gone", "item_not_for_sale"):
                     raise
-                return await self._fail(trade["id"], "item_gone")
+                return await self._fail(trade["id"], exc.code)
             async with self.repo.transaction():
                 trade = await self._locked_trade(trade["id"])
                 if len(trade["copied"]) == n:  # 并发重来的那一个已经记了就不再记
@@ -632,9 +623,11 @@ class MarketService:
                         *trade["copied"],
                         {
                             "seller_item_id": str(item["seller_item_id"]),
-                            "item_id": str(got.get("item_id")),
-                            "name": str(got.get("name") or item.get("name")),
-                            "sha256": str(got.get("sha256") or item.get("sha256")),
+                            # 使用权建在同一份资料上（不复制），编号就是卖家那份
+                            "item_id": str(got.get("material_id")),
+                            "version_no": got.get("version_no"),
+                            "name": str(item.get("name")),
+                            "sha256": str(item.get("sha256")),
                         },
                     ]
                     await self.repo.update_trade(trade["id"], copied=copied)
@@ -649,8 +642,8 @@ class MarketService:
         return trade
 
     async def _fail(self, trade_id: uuid.UUID, reason: str) -> Row:
-        """卖家那份没了，复制不下去：这笔记成终态失败、照实告诉买家，不再接手（Fable
-        评审 P1-2）。已复制进买家知识库的那几份照旧归他。"""
+        """卖家那份没了或不再出售，办不下去：这笔记成终态失败、照实告诉买家，不再接手
+        （Fable 评审 P1-2）。已建好的那几份使用权照旧归他。"""
         async with self.repo.transaction():
             trade = await self._locked_trade(trade_id)
             if trade["status"] == "copying":
@@ -672,34 +665,45 @@ class MarketService:
             )
         return self.vault
 
+    async def materials(self, user_token: UserToken) -> list[Row]:
+        """小店选资料：卖家在 knowbase 交给 knowmart 的资料（knowmart 栏）。"""
+        vault = self._need_vault()
+        return await vault.materials(await user_token())
+
     async def _items(
         self, subject: str, body: KnowledgeListingIn, user_token: UserToken
     ) -> list[Row]:
-        """核每一份都在卖家自己的 knowmart 知识库里；买来、不许转卖的不能拿来卖。"""
-        if self.vault is None:
-            raise AppException(
-                code="knowbase_unconfigured",
-                status_code=503,
-                msg="knowbase_unconfigured",
-            )
-        token = await user_token()
+        """核每一份都是卖家交给 knowmart 的、自己的、许可是「可以出售」的（SDD 0043
+        第 4.3 节）；买来、不许转卖的同样内容（下载了再传的）不能拿来卖。"""
+        vault = self._need_vault()
+        offered = {
+            m["material_id"]: m for m in await vault.materials(await user_token())
+        }
         no_resale = await self.repo.bought_without_resale(subject)
         items = []
         for ref in body.items:
-            got = await self.vault.item(token, ref.item_id)
-            # 资料自己带着「不许转卖」（买来的、下载了再传的同样内容），或按买过的摘要
-            if got.get("no_resale") is True or str(got.get("sha256")) in no_resale:
+            got = offered.get(ref.item_id)
+            if got is None:
+                raise NotFoundError(
+                    "This material is not handed to knowmart", code="item_not_found"
+                )
+            if not got["sellable"]:
                 raise BadRequestError(
-                    f"{got.get('name')} was bought without the right to resell",
+                    f"{got['name']} is not licensed for sale", code="item_not_for_sale"
+                )
+            # 按买过的摘要：买来、不许转卖的，下载了再传的同样内容也不能卖
+            if got["sha256"] in no_resale:
+                raise BadRequestError(
+                    f"{got['name']} was bought without the right to resell",
                     code="resale_not_allowed",
                 )
             items.append(
                 {
                     "item_id": ref.item_id,
-                    "name": str(got.get("name")),
-                    "media_type": str(got.get("media_type")),
-                    "size_bytes": int(got.get("size_bytes") or 0),
-                    "sha256": str(got.get("sha256")),
+                    "name": got["name"],
+                    "media_type": got["media_type"],
+                    "size_bytes": got["size_bytes"],
+                    "sha256": got["sha256"],
                 }
             )
         return items

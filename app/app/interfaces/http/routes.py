@@ -5,7 +5,6 @@ from app.interfaces.endpoints.knowbot_routes import (
     internal_router as knowbot_internal_router,
 )
 from app.interfaces.endpoints.knowbot_routes import web_router as knowbot_web_router
-from app.interfaces.endpoints.library_routes import router as library_router
 from app.interfaces.endpoints.market_routes import admin_router as market_admin_router
 from app.interfaces.endpoints.market_routes import web_router as market_web_router
 from app.interfaces.http.admin.auth import router as admin_auth_router
@@ -27,6 +26,5 @@ router.include_router(web_cross_app_router)
 router.include_router(knowbot_internal_router)
 router.include_router(knowbot_web_router)
 router.include_router(expert_router)
-router.include_router(library_router)
 router.include_router(market_web_router)
 router.include_router(market_admin_router)

@@ -2,8 +2,8 @@
 
 条目、需求、响应、交易、评价、举报的形状与状态。纯逻辑。
 
-- 两种并列的商品：专家（请，用请的人自己的数据）与知识（买，复制一份进买家的
-  知识库）。
+- 两种并列的商品：专家（请，用请的人自己的数据）与知识（买，knowbase 给买家建
+  成交那一版的使用权，不复制，SDD 0043 第 4.3 节）。
 - 交易方式：直接买 / 请；需求响应（买家发需求、卖家响应、买家选一家）。
   比稿、计件本期不做。
 - 本期标价、记成交，不接真实支付（第 9 小节第 2 项）。
@@ -23,7 +23,6 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Kind = Literal["expert", "knowledge"]
-TargetApp = Literal["knowbench", "knowlab"]
 ListingStatus = Literal[
     "draft", "pending", "listed", "rejected", "delisted", "taken_down"
 ]
@@ -132,6 +131,7 @@ class ExpertListingIn(Strict):
 
 
 class KnowledgeItemRef(Strict):
+    # knowbase 的资料编号（material_id；数据第四版搬迁时沿用了原来的编号）
     item_id: str = Field(min_length=1, max_length=64)
 
 
@@ -217,14 +217,14 @@ class ReportIn(Strict):
 
 
 class BuyIn(Strict):
-    """买知识：复制进买家哪个知识库（knowbench 云端或 knowlab）。
+    """买知识：成交后 knowbase 给买家建使用权，进他总栏的「买来的」（SDD 0043 第 4.3
+    节；资料不再按应用分区，不用选放进哪个应用）。
 
     从需求响应来的带需求编号。request_id 是这一次购买的幂等键（网页每次打开买的那一处
     生成一个，重试沿用）：同一个键重来接着做原来那一笔，参数不同就拒（Astra 评审 F07）。
     """
 
     request_id: str = Field(pattern=r"^[A-Za-z0-9-]{8,64}$")
-    target_app: TargetApp
     demand_id: str | None = Field(default=None, min_length=36, max_length=36)
 
 

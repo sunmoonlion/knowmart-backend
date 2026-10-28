@@ -116,7 +116,7 @@ class MarketRepository(Protocol):
         offset: int = 0,
         copying: bool = False,
     ) -> list[Row]:
-        """成交记录；copying 时连还没复制完的也列（运营对账用）。"""
+        """成交记录；copying 时连还没办完的也列（运营对账用）。"""
         ...
 
     async def bought_without_resale(self, buyer: str) -> set[str]: ...
@@ -141,21 +141,22 @@ class MarketRepository(Protocol):
 
 
 class KnowledgeVault(Protocol):
-    """knowbase 里的知识（契约 user-data/v1，SDD 0042 第八节）。
+    """knowbase 资料库里的知识（契约 user-data/v2，SDD 0043 第 4.3 节）。
 
-    item：卖家本人凭令牌核他 knowmart 知识库里的一份；purchase：成交时复制一份进买家的
-    knowbench 或 knowlab 分区（服务身份 user-data-purchase，按 transaction_ref 幂等）。
+    materials：卖家本人凭令牌列他交给 knowmart 的资料（knowbase 的 knowmart 栏，每份
+    带 material_id、名字、当前那一版的摘要、许可、能不能卖）；purchase：成交后请
+    knowbase 给买家建使用权，只到成交那一版、不复制（服务身份 user-data-purchase，按
+    transaction_ref 幂等）。
     """
 
-    async def item(self, user_token: str, item_id: str) -> Row: ...
+    async def materials(self, user_token: str) -> list[Row]: ...
 
     async def purchase(
         self,
         *,
         seller: str,
-        seller_item_id: str,
+        material_id: str,
         buyer: str,
-        buyer_app: str,
         transaction_ref: str,
-        no_resale: bool = False,
+        resale_allowed: bool = False,
     ) -> Row: ...

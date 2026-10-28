@@ -21,30 +21,7 @@ from app.domain.knowbots.catalog import DEFAULT_CATEGORY
 
 
 def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
-    doc: dict[str, Any] = {
-        "schema": "knowbot-manifest/v1",
-        "name": "财务分析与预测",
-        "tagline": "按我的方法分析一家公司的财报",
-        "version": version,
-        "runtime": "knowbench",
-        "pack": {
-            "pack_id": "fin-forecast",
-            "version": version,
-            "workflow": [{"step_id": "s1", "title": "读财报"}],
-        },
-        "data_bindings": [
-            {"dataset_id": "ds-600519", "version": "3", "sha256": "a" * 64}
-        ],
-        "rule_sources": [
-            {"rule": "毛利率口径", "source": "user_text", "ref": "想法原文第 2 段"}
-        ],
-    }
-    doc.update(overrides)
-    return doc
-
-
-def manifest_v2(version: str = "1", **overrides: Any) -> dict[str, Any]:
-    """清单 v2：逻辑 + 作者挑选的数据（只带冻结的引用）；没有数据需求声明。"""
+    """合格的清单 v2：逻辑 + 作者挑选的数据（只带冻结的引用）；没有数据需求声明。"""
     doc: dict[str, Any] = {
         "schema": "knowbot-manifest/v2",
         "name": "财务分析与预测",

@@ -1,12 +1,15 @@
-"""knowbase 的用户资料（契约 user-data/v1，SDD 0042）：本应用这一个知识库分区的读写。
+"""knowbase 的资料库（契约 user-data/v2，SDD 0043 第 4.3 节）：小店选资料、成交建使用权
+（不复制）。
 
+资料不再按应用分区，真源都在 knowbase；knowmart 没有上传，卖家在 knowbase 总栏把资料
+「交给 knowmart」（用途 `market`），资料就进 knowbase 的 knowmart 栏，小店从这一栏选。
 两种身份：
 - 用户本人：请求带换来的用户令牌（`AuthService.user_token`，audience 是 knowbase
-  在 Casdoor 里的客户端编号，配置 `KNOWBASE_USER_AUDIENCE`）；
-  knowbase 按令牌的 `azp` 认是本应用的分区。
+  在 Casdoor 里的客户端编号，配置 `KNOWBASE_USER_AUDIENCE`）；knowbase 按令牌的 `azp`
+  认是本应用代办，只给看本应用自己的栏（`GET /columns/knowmart`）。
 - 服务：按跨应用约定的「目标:关系」服务身份，环境变量 `KNOWBASE_INTERNAL_URL`、
-  `KNOWBASE_USER_DATA_<关系>_SERVICE_*`（关系：user-data-read、user-data-grant-test、
-  user-data-purchase），见 service_client.py。
+  `KNOWBASE_USER_DATA_PURCHASE_SERVICE_*`（关系 user-data-purchase），见
+  service_client.py：成交后请 knowbase 给买家建使用权，只到成交那一版，不复制。
 knowbase 回 4xx 抛 KnowbaseRefused（带它的 code，调用方转成自己的话）；不可达、5xx 抛
 ServiceUnavailableError。令牌只在内存里，不进日志。
 """
@@ -15,9 +18,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -29,11 +31,13 @@ from app.application.errors.exceptions import (
 )
 from app.infrastructure.external.service_client import ServiceClient, service_relation
 
-BASE = "/api/internal/v1/user-data"
+BASE = "/api/internal/v2/user-data"
+COLUMN = "knowmart"  # knowbase 里本应用的栏：用户交给 knowmart 的资料
+SALE = "sale"  # 资料的许可档「可以出售」：只有这一档能上架
 
 
 class KnowbaseRefused(Exception):
-    """knowbase 拒了：资料不在、在用不能删、钉的版本不对、授权失效……"""
+    """knowbase 拒了：资料不在、不许出售、交易编号不对……"""
 
     def __init__(self, status: int, code: str) -> None:
         super().__init__(code)
@@ -41,18 +45,7 @@ class KnowbaseRefused(Exception):
         self.code = code
 
 
-@dataclass(frozen=True)
-class Content:
-    data: bytes
-    media_type: str
-    sha256: str
-
-
-def _segment(value: str) -> str:
-    return quote(value, safe="")
-
-
-class KnowbaseUserData:
+class KnowbaseLibrary:
     def __init__(
         self,
         environ: Mapping[str, str] | None = None,
@@ -69,140 +62,34 @@ class KnowbaseUserData:
 
     # —— 用户本人 ——
 
-    async def upload(
-        self, user_token: str, name: str, content: bytes
-    ) -> dict[str, Any]:
-        _, body, _ = await self._send(
-            "POST", "/items", user_token, content=content, params={"name": name}
-        )
-        return body
-
-    async def items(self, user_token: str) -> list[dict[str, Any]]:
-        _, body, _ = await self._send("GET", "/items", user_token)
-        return body
-
-    async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
-        _, body, _ = await self._send("GET", f"/items/{_segment(item_id)}", user_token)
-        return body
-
-    async def download(self, user_token: str, item_id: str) -> Content:
-        return await self._content(f"/items/{_segment(item_id)}/content", user_token)
-
-    async def delete(self, user_token: str, item_id: str) -> None:
-        await self._send("DELETE", f"/items/{_segment(item_id)}", user_token)
-
-    async def consent(
-        self, user_token: str, purpose: str, ref: str, items: list[dict[str, str]]
-    ) -> dict[str, Any]:
-        _, body, _ = await self._send(
-            "POST",
-            "/consents",
-            user_token,
-            json={"purpose": purpose, "ref": ref, "items": items},
-        )
-        return body
-
-    async def withdraw_consent(self, user_token: str, consent_id: str) -> None:
-        await self._send("DELETE", f"/consents/{_segment(consent_id)}", user_token)
-
-    async def grant(
-        self,
-        user_token: str,
-        *,
-        kind: str,
-        reader_app: str,
-        ref: str,
-        items: list[dict[str, str]],
-        ttl_seconds: int | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "kind": kind,
-            "reader_app": reader_app,
-            "ref": ref,
-            "items": items,
-        }
-        if ttl_seconds is not None:
-            payload["ttl_seconds"] = ttl_seconds
-        _, body, _ = await self._send("POST", "/grants", user_token, json=payload)
-        return body
-
-    async def revoke(self, user_token: str, grant_id: str) -> None:
-        await self._send("POST", f"/grants/{_segment(grant_id)}/revoke", user_token)
+    async def column(self, user_token: str) -> list[dict[str, Any]]:
+        """本人交给 knowmart、自己还有使用权的资料（knowbase 书架条目的形状）。"""
+        return await self._send("GET", f"/columns/{COLUMN}", user_token)
 
     # —— 服务 ——
-
-    async def test_grant(
-        self,
-        *,
-        owner: str,
-        consent_id: str,
-        reader_app: str,
-        ref: str,
-        items: list[dict[str, str]],
-        ttl_seconds: int | None = None,
-    ) -> dict[str, Any]:
-        payload: dict[str, Any] = {
-            "owner": owner,
-            "consent_id": consent_id,
-            "reader_app": reader_app,
-            "ref": ref,
-            "items": items,
-        }
-        if ttl_seconds is not None:
-            payload["ttl_seconds"] = ttl_seconds
-        token = await self._service_token("user-data-grant-test")
-        _, body, _ = await self._send("POST", "/test-grants", token, json=payload)
-        return body
-
-    async def revoke_test_grant(self, grant_id: str) -> None:
-        token = await self._service_token("user-data-grant-test")
-        await self._send("POST", f"/test-grants/{_segment(grant_id)}/revoke", token)
-
-    async def view_grant(self, grant_id: str) -> dict[str, Any]:
-        token = await self._service_token("user-data-read")
-        _, body, _ = await self._send("GET", f"/grants/{_segment(grant_id)}", token)
-        return body
-
-    async def read_content(self, grant_id: str, item_id: str) -> Content:
-        token = await self._service_token("user-data-read")
-        return await self._content(
-            f"/grants/{_segment(grant_id)}/items/{_segment(item_id)}/content", token
-        )
-
-    async def read_format(self, grant_id: str, item_id: str) -> dict[str, Any]:
-        token = await self._service_token("user-data-read")
-        _, body, _ = await self._send(
-            "GET",
-            f"/grants/{_segment(grant_id)}/items/{_segment(item_id)}/format",
-            token,
-        )
-        return body
 
     async def purchase(
         self,
         *,
         seller: str,
-        seller_item_id: str,
+        material_id: str,
         buyer: str,
-        buyer_app: str,
         transaction_ref: str,
-        no_resale: bool = False,
+        resale_allowed: bool = False,
     ) -> dict[str, Any]:
         token = await self._service_token("user-data-purchase")
-        _, body, _ = await self._send(
+        return await self._send(
             "POST",
             "/purchases",
             token,
             json={
                 "seller": seller,
-                "seller_item_id": seller_item_id,
+                "material_id": material_id,
                 "buyer": buyer,
-                "buyer_app": buyer_app,
                 "transaction_ref": transaction_ref,
-                "no_resale": no_resale,
+                "resale_allowed": resale_allowed,
             },
         )
-        return body
 
     # —— 内部 ——
 
@@ -226,25 +113,9 @@ class KnowbaseUserData:
             self._services[relation] = client
         return await client.token()
 
-    async def _content(self, path: str, token: str) -> Content:
-        _, body, headers = await self._send("GET", path, token, raw=True)
-        return Content(
-            data=body,
-            media_type=headers.get("content-type", "application/octet-stream"),
-            sha256=headers.get("x-content-sha256", ""),
-        )
-
     async def _send(
-        self,
-        method: str,
-        path: str,
-        token: str,
-        *,
-        json: Any = None,
-        content: bytes | None = None,
-        params: dict[str, str] | None = None,
-        raw: bool = False,
-    ) -> tuple[int, Any, httpx.Headers]:
+        self, method: str, path: str, token: str, *, json: Any = None
+    ) -> Any:
         url = self._base() + path
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
@@ -253,14 +124,7 @@ class KnowbaseUserData:
                 follow_redirects=False,
                 transport=self._transport,
             ) as client:
-                response = await client.request(
-                    method,
-                    url,
-                    json=json,
-                    content=content,
-                    params=params,
-                    headers=headers,
-                )
+                response = await client.request(method, url, json=json, headers=headers)
         except httpx.HTTPError as exc:
             raise ServiceUnavailableError(
                 "knowbase is unreachable", code="knowbase_unavailable"
@@ -276,59 +140,76 @@ class KnowbaseUserData:
                 answer = None
             code = answer.get("code") if isinstance(answer, dict) else None
             raise KnowbaseRefused(response.status_code, str(code or "knowbase_refused"))
-        if raw:
-            return response.status_code, response.content, response.headers
         if response.status_code == 204 or not response.content:
-            return response.status_code, None, response.headers
-        return response.status_code, response.json(), response.headers
+            return None
+        return response.json()
+
+
+def material_view(entry: dict[str, Any]) -> dict[str, Any]:
+    """knowbase 书架条目 → 小店选资料要的几样：名字、当前那一版、许可、能不能卖。
+
+    能卖 = 卖家自己的（买来的不能再卖：knowbase 只认所有者出售）、没删、许可是「可以
+    出售」（只有自己上传的能改成这一档，公开原件、采集来的、产出都不行）。
+    """
+    material = entry.get("material") or {}
+    version = entry.get("version") or {}
+    license_ = str(material.get("license") or "")
+    mine = material.get("mine") is True
+    return {
+        "material_id": str(material.get("material_id")),
+        "name": str(material.get("name") or ""),
+        "version_no": int(version.get("version_no") or 0),
+        "media_type": str(version.get("media_type") or ""),
+        "size_bytes": int(version.get("size_bytes") or 0),
+        "sha256": str(version.get("sha256") or ""),
+        "license": license_,
+        "mine": mine,
+        "sellable": mine and license_ == SALE and material.get("deleted") is not True,
+    }
 
 
 class KnowbaseVault:
-    """端口 KnowledgeVault 的实现（SDD 0042 第八节）。
+    """端口 KnowledgeVault 的实现（SDD 0043 第 4.3 节）。
 
-    核卖家的资料、成交时复制给买家。
+    列卖家交给 knowmart 的资料、成交后给买家建使用权。
     """
 
-    def __init__(self, client: KnowbaseUserData) -> None:
+    def __init__(self, client: KnowbaseLibrary) -> None:
         self.client = client
 
-    async def item(self, user_token: str, item_id: str) -> dict[str, Any]:
+    async def materials(self, user_token: str) -> list[dict[str, Any]]:
         try:
-            return await self.client.item(user_token, item_id)
+            entries = await self.client.column(user_token)
         except KnowbaseRefused as exc:
-            if exc.status == 404:
-                raise NotFoundError(
-                    "This item is not in your knowledge base", code="item_not_found"
-                ) from None
             raise BadGatewayError("knowbase refused", code=exc.code) from None
+        return [material_view(e) for e in entries or [] if isinstance(e, dict)]
 
     async def purchase(
         self,
         *,
         seller: str,
-        seller_item_id: str,
+        material_id: str,
         buyer: str,
-        buyer_app: str,
         transaction_ref: str,
-        no_resale: bool = False,
+        resale_allowed: bool = False,
     ) -> dict[str, Any]:
         try:
             return await self.client.purchase(
                 seller=seller,
-                seller_item_id=seller_item_id,
+                material_id=material_id,
                 buyer=buyer,
-                buyer_app=buyer_app,
                 transaction_ref=transaction_ref,
-                no_resale=no_resale,
+                resale_allowed=resale_allowed,
             )
         except KnowbaseRefused as exc:
             if exc.status == 404:
                 raise NotFoundError(
-                    "The seller's copy is no longer there", code="item_gone"
+                    "The seller's material is no longer there", code="item_gone"
                 ) from None
-            if exc.code == "quota_exceeded":
+            if exc.code == "not_for_sale":
+                # 卖家上架以后把许可改低了：这一笔建不成，照实告诉买家
                 raise ConcurrencyConflictError(
-                    "Your knowledge base has no room for it",
-                    code="buyer_quota_exceeded",
+                    "The seller no longer sells this material",
+                    code="item_not_for_sale",
                 ) from None
             raise BadGatewayError("knowbase refused", code=exc.code) from None

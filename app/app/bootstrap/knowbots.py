@@ -10,7 +10,7 @@ from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketAdmin, MarketService
 from app.infrastructure.external.knowbase_user_data import (
-    KnowbaseUserData,
+    KnowbaseLibrary,
     KnowbaseVault,
 )
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
@@ -34,9 +34,10 @@ def expert_catalog(session: AsyncSession) -> ExpertCatalog:
 
 
 def market_service(session: AsyncSession) -> MarketService:
-    """供需市场（SDD 0018 第十一节）：知识的复制经 knowbase（没配就买不了知识）。"""
+    """供需市场（SDD 0018 第十一节）：选资料、成交建使用权经 knowbase（user-data/v2；
+    没配就卖不了、买不了知识）。"""
     vault = (
-        KnowbaseVault(KnowbaseUserData())
+        KnowbaseVault(KnowbaseLibrary())
         if os.environ.get("KNOWBASE_INTERNAL_URL", "").strip()
         else None
     )

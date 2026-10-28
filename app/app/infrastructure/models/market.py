@@ -121,6 +121,7 @@ class Trade(Base):
     listing_ref: Mapped[str] = mapped_column(String(128), nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    # v1 时买知识复制进的应用；user-data/v2 不分区，新成交为空，旧的留作历史
     target_app: Mapped[str | None] = mapped_column(String(16))
     copied: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
@@ -128,7 +129,7 @@ class Trade(Base):
     demand_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("demand.id", ondelete="SET NULL")
     )
-    # 买知识：复制中 / 成交；这次操作的幂等键与参数摘要；要复制的几份（Astra 评审 F07）
+    # 买知识：办理中（copying，v1 时是复制）/ 成交；幂等键与参数摘要；要建使用权的几份
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="done")
     request_key: Mapped[str | None] = mapped_column(String(64))
     request_digest: Mapped[str | None] = mapped_column(String(64))

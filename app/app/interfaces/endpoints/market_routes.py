@@ -184,6 +184,15 @@ async def my_listings(principal: User, svc: Service) -> JSONResponse:
     return ok(await svc.my_listings(principal.subject))
 
 
+@web_router.get("/knowledge/materials")
+async def my_materials(
+    _: User, svc: Service, token: Annotated[Any, Depends(_token)]
+) -> JSONResponse:
+    """写条目时选的资料：在 knowbase 总栏交给 knowmart 的那些（user-data/v2 的
+    knowmart 栏），每份标能不能卖（自己的、许可是「可以出售」）。"""
+    return ok(await svc.materials(token))
+
+
 @web_router.post("/knowledge", status_code=201)
 async def create_listing(
     principal: User,
@@ -191,7 +200,7 @@ async def create_listing(
     svc: Service,
     token: Annotated[Any, Depends(_token)],
 ) -> JSONResponse:
-    """写一条知识条目（草稿）：资料从自己的 knowmart 知识库里选。"""
+    """写一条知识条目（草稿）：资料从自己交给 knowmart 的资料里选。"""
     found = await svc.create_listing(principal.subject, body, token)
     return ok({"listing": found}, status_code=201)
 
@@ -229,7 +238,8 @@ async def delist_listing(principal: User, svc: Service, listing_id: Id) -> JSONR
 async def buy(
     principal: User, body: BuyIn, svc: Service, listing_id: Id
 ) -> JSONResponse:
-    """买知识：复制一份进你选的知识库；本期标价、记成交，不收钱。"""
+    """买知识：knowbase 给你建这份的使用权，进你总栏的「买来的」；本期标价、记成交，
+    不收钱。"""
     found = await svc.buy(principal.subject, listing_id, body)
     return ok({"trade": found}, status_code=201)
 

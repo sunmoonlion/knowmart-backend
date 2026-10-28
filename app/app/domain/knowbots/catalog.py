@@ -98,47 +98,8 @@ def asks_by_question(manifest: dict[str, Any]) -> bool:
 
 
 def accepts_user_data(manifest: dict[str, Any]) -> bool:
-    """请它时要不要请的人提供自己的数据：写了数据需求声明的（SDD 0042 第五节）、
-    清单 v2 的（按问题提出、你确认）要。"""
-    return (
-        bool(data_needs(manifest))
-        or asks_by_question(manifest)
-        or manifest.get("accepts_user_data") is True
-    )
-
-
-def data_needs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """详情页「需要你提供哪些数据」：v1 清单的数据需求声明（交付时已按外层模型核过）；
-    清单 v2 没有声明。"""
-    raw = manifest.get("data_needs")
-    needs = []
-    for n in raw if isinstance(raw, list) else []:
-        if not isinstance(n, dict):
-            continue
-        tables = [t for t in n.get("tables") or [] if isinstance(t, dict)]
-        needs.append(
-            {
-                "key": _text(n.get("key"), 40),
-                "name": _text(n.get("name"), 80),
-                "description": _text(n.get("description"), 500),
-                "formats": [f for f in n.get("formats") or [] if isinstance(f, str)],
-                "required": n.get("required", True) is not False,
-                "min_count": int(n.get("min_count") or 1),
-                "max_count": int(n.get("max_count") or 1),
-                "tables": [
-                    {
-                        "sheet": _text(t.get("sheet"), 100) or None,
-                        "columns": [
-                            _text(c, 100)
-                            for c in t.get("columns") or []
-                            if _text(c, 100)
-                        ],
-                    }
-                    for t in tables
-                ],
-            }
-        )
-    return needs
+    """请它时要不要请的人提供自己的数据：清单 v2 都要（按问题提出、你确认）。"""
+    return asks_by_question(manifest)
 
 
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
@@ -152,7 +113,6 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
             can_do.append({"label": label, "text": text})
     scope = _dict(pack.get("scope"))
     workflow = [s for s in pack.get("workflow") or [] if isinstance(s, dict)]
-    bindings = [b for b in manifest.get("data_bindings") or [] if isinstance(b, dict)]
     sections: dict[str, Any] = {
         "can_do": can_do,
         "scope": {
@@ -161,15 +121,6 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
             "elsewhere": _text(scope.get("elsewhere")),
         },
         "data": {
-            "bundled": [
-                {
-                    "dataset_id": _text(b.get("dataset_id"), 128),
-                    "version": _text(b.get("version"), 64),
-                }
-                for b in bindings
-            ],
-            # 写了数据需求声明的（v1 新格式）：请它时按这几样从自己的知识库选
-            "needs": data_needs(manifest),
             # 清单 v2：每件委托按你的问题提出要哪些数据、你确认
             "asks_by_question": asks_by_question(manifest),
             # 清单 v2：作者挑选的数据留在 knowbase，这里只说有几份（不给浏览、下载入口）

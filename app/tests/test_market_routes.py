@@ -33,6 +33,10 @@ class FakeMarket:
         self.calls.append(("my_trades", subject, role))
         return []
 
+    async def materials(self, user_token: Any) -> list[dict[str, Any]]:
+        self.calls.append(("materials", await user_token()))
+        return [{"material_id": "m1", "name": "行业数据.csv", "sellable": True}]
+
 
 class FakeAdmin:
     async def queue(self) -> dict[str, Any]:
@@ -107,3 +111,24 @@ async def test_admin_endpoints_are_not_for_web_users(market) -> None:
     async with client() as c:
         denied = await c.get("/api/admin/v1/knowmart/market/queue")
         assert denied.status_code in (401, 403)
+
+
+async def test_materials_come_from_knowbase_with_the_users_token(market) -> None:
+    """写知识条目选的资料：用户交给 knowmart 的（user-data/v2 的 knowmart 栏）。"""
+
+    async def provide() -> str:
+        return "knowbase-token"
+
+    app.dependency_overrides[market_routes._token] = lambda: provide
+    async with client() as c:
+        got = await c.get(f"{BASE}/knowledge/materials")
+        assert got.status_code == 200 and got.headers["cache-control"] == "no-store"
+        assert [m["material_id"] for m in got.json()["items"]] == ["m1"]
+        assert market.calls[-1] == ("materials", "knowbase-token")
+        # 资料不分应用：买知识不再收「放进哪个应用」
+        refused = await c.post(
+            f"{BASE}/knowledge/l1/buy",
+            json={"request_id": "buy-00001", "target_app": "knowbench"},
+            headers={"Origin": ORIGIN, "X-CSRF-Token": CSRF},
+        )
+        assert refused.status_code == 422

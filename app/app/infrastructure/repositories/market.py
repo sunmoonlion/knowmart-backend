@@ -595,7 +595,7 @@ class SqlMarketRepository:
     async def copying_trade(
         self, buyer: str, request_digest: str
     ) -> dict[str, Any] | None:
-        """这个买家同样参数、还没复制完的那一笔（换了幂等键重来时接着做）。"""
+        """这个买家同样参数、还没办完的那一笔（换了幂等键重来时接着做）。"""
         row = (
             await self.session.execute(
                 select(Trade)
@@ -654,7 +654,7 @@ class SqlMarketRepository:
     async def bought_without_resale(self, buyer: str) -> set[str]:
         """这个人买来、不许转卖的知识的内容摘要（上架时不许拿它们再卖）。
 
-        按成交那一刻卖家写的算，不按条目现在的勾选（Fable 评审 P2-16）；复制到一半的
+        按成交那一刻卖家写的算，不按条目现在的勾选（Fable 评审 P2-16）；办到一半的
         也算。
         """
         rows = (

@@ -16,7 +16,7 @@ from app.application.services.expert_catalog import (
 )
 from app.application.services.knowbot_service import KnowbotService
 from app.domain.knowbots.catalog import expert_sections
-from tests.knowbot_fakes import MemoryKnowbots, manifest, manifest_v2
+from tests.knowbot_fakes import MemoryKnowbots, manifest
 
 ME = "user-me"
 OTHER = "user-other"
@@ -121,22 +121,17 @@ async def test_filters_sort_and_pages() -> None:
     repo = MemoryKnowbots()
     old = await deliver(repo, ME, "old", name="甲 旧专家", tagline="看财报")
     await deliver(repo, ME, "new", name="乙 新专家", tagline="做预测")
-    taking = await deliver(
-        repo, ME, "taking", name="丙 要你的数据", tagline="读你给的表"
-    )
-    # 交付时间：旧的 40 天前，新的今天；「要你的数据」声明接受外来数据
+    await deliver(repo, ME, "taking", name="丙 要你的数据", tagline="读你给的表")
+    # 交付时间：旧的 40 天前，新的今天
     first = repo.versions[(old, "1")]
     repo.versions[(old, "1")] = replace(first, delivered_at=NOW - timedelta(days=40))
-    taking_v = repo.versions[(taking, "1")]
-    repo.versions[(taking, "1")] = replace(
-        taking_v, manifest={**taking_v.manifest, "accepts_user_data": True}
-    )
     svc = catalog(repo)
     assert names(await svc.list(ME, CatalogQuery(q="财报"))) == ["甲 旧专家"]
     assert names(await svc.list(ME, CatalogQuery(q="预测"))) == ["乙 新专家"]
     assert "甲 旧专家" not in names(await svc.list(ME, CatalogQuery(updated="30d")))
-    assert names(await svc.list(ME, CatalogQuery(data="user"))) == ["丙 要你的数据"]
-    assert "丙 要你的数据" not in names(await svc.list(ME, CatalogQuery(data="own")))
+    # 清单 v2 的专家都按你的问题要你的数据（decisions ⑭）
+    assert len(names(await svc.list(ME, CatalogQuery(data="user")))) == 3
+    assert names(await svc.list(ME, CatalogQuery(data="own"))) == []
     assert names(await svc.list(ME, CatalogQuery(sort="name"))) == [
         "丙 要你的数据",
         "乙 新专家",
@@ -291,11 +286,9 @@ def test_sections_read_what_the_manifest_has() -> None:
     ]
     assert owner["scope"] == {"does": "看走势", "does_not": "荐股", "elsewhere": ""}
     assert owner["data"] == {
-        "bundled": [{"dataset_id": "ds-600519", "version": "3"}],
-        "needs": [],
-        "asks_by_question": False,
-        "bound_count": 0,
-        "accepts_user_data": False,
+        "asks_by_question": True,
+        "bound_count": 1,
+        "accepts_user_data": True,
     }
     assert owner["delivers"] == [{"step": "成稿", "file": "底稿/成稿.md"}]
     assert [s["title"] for s in owner["steps"]] == ["取数", "成稿"]
@@ -307,47 +300,12 @@ def test_sections_read_what_the_manifest_has() -> None:
     ]
 
 
-def test_the_detail_page_says_what_data_you_bring() -> None:
-    """SDD 0042 第五节：写了数据需求声明的专家，详情页列出要你提供的几样。"""
-    doc = manifest(
-        data_bindings=[],
-        data_needs=[
-            {
-                "key": "statements",
-                "name": "三张报表",
-                "description": "最近三年",
-                "formats": ["excel", "csv"],
-                "required": True,
-                "min_count": 1,
-                "max_count": 3,
-                "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
-            }
-        ],
-    )
-    data = expert_sections(doc, owner=False)["data"]
-    assert data["accepts_user_data"] is True and data["bundled"] == []
-    assert data["needs"] == [
-        {
-            "key": "statements",
-            "name": "三张报表",
-            "description": "最近三年",
-            "formats": ["excel", "csv"],
-            "required": True,
-            "min_count": 1,
-            "max_count": 3,
-            "tables": [{"sheet": "利润表", "columns": ["营业收入"]}],
-        }
-    ]
-    assert data["bound_count"] == 0
-
-
 def test_a_v2_manifest_asks_by_question_and_says_how_many_bound() -> None:
     """清单 v2 没有声明：每件委托按你的问题提出要哪些数据、你确认（decisions ⑭）。"""
-    data = expert_sections(manifest_v2(), owner=False)["data"]
-    assert data["needs"] == []
+    data = expert_sections(manifest(), owner=False)["data"]
     assert data["asks_by_question"] is True and data["accepts_user_data"] is True
     # 作者挑选的数据只说有几份，不列资料编号
-    assert data["bound_count"] == 1 and data["bundled"] == []
+    assert data["bound_count"] == 1
     assert "m-1" not in str(data)
 
 
