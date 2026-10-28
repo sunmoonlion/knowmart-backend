@@ -11,6 +11,9 @@
 上架为止。
 两样都是只加不改：没写声明的清单、绑定上没写对应哪一样的，规范 JSON 与以前一字不差。
 
+清单 v2（10-28 起，decisions ⑭）= 逻辑 + 作者挑选的数据：不再有数据需求声明，每件
+委托要什么数据由委托第 0 步用户自己的模型按专家逻辑和用户问题提出、用户确认。
+
 摘要是外层规范 JSON（键排序、紧凑分隔、UTF-8）的 sha256：同一个版本只认一份内容。
 """
 
@@ -21,8 +24,6 @@ import json
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-
-from app.domain.knowbots.data_needs_v2 import DataNeed as DataNeedV2
 
 SCHEMA = "knowbot-manifest/v1"
 MAX_MANIFEST_BYTES = 1_000_000
@@ -169,15 +170,12 @@ _FROZEN = r"^expert:[A-Za-z0-9._-]{1,64}@[0-9][0-9.]{0,31}$"
 
 
 class FrozenBinding(Strict):
-    """作者绑给这位专家、交付时冻结的一份（SDD 0043 第 4.4 节）。
+    """作者挑选、交付时冻结的一份（SDD 0043 第 4.4 节）。
 
     数据留在 knowbase，这里只记引用：哪份资料、哪一版与摘要（要读法的再钉读法），
     凭的是 `expert:<专家>@<版本>`；别人请这位专家时按受益人授权读。
     """
 
-    need: str | None = Field(
-        default=None, pattern=NEED_KEY, exclude_if=lambda value: value is None
-    )
     material_id: str = Field(min_length=1, max_length=64)
     version_no: int = Field(ge=1)
     sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -194,8 +192,8 @@ class FrozenBinding(Strict):
 
 
 class KnowbotManifestV2(Strict):
-    """清单 v2（SDD 0043 第三、四节）：数据需求声明换成 v2（knowbase 的契约），
-    作者绑定的数据只带冻结的引用；不再有 knowlab 数据集的绑定。"""
+    """清单 v2（SDD 0043 第三、四节）：逻辑 + 作者挑选的数据（只带冻结的引用）。
+    不再有数据需求声明（decisions ⑭），也不再有 knowlab 数据集的绑定。"""
 
     schema_: Literal["knowbot-manifest/v2"] = Field(alias="schema")
     name: str = Field(min_length=1, max_length=80)
@@ -203,7 +201,6 @@ class KnowbotManifestV2(Strict):
     version: str = Field(pattern=r"^[1-9][0-9]{0,5}$")
     runtime: str = Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")
     pack: dict[str, Any]
-    data_needs: tuple[DataNeedV2, ...] = Field(default=(), max_length=20)
     bindings: tuple[FrozenBinding, ...] = Field(default=(), max_length=200)
     rule_sources: tuple[RuleSource, ...] = Field(min_length=1, max_length=500)
 
@@ -216,19 +213,9 @@ class KnowbotManifestV2(Strict):
     def _consistent(self) -> KnowbotManifestV2:
         if str(self.pack.get("version")) != self.version:
             raise ValueError("pack.version must equal the manifest version")
-        keys = [n.key for n in self.data_needs]
-        if len(keys) != len(set(keys)):
-            raise ValueError("each data need needs its own key")
-        for need in self.data_needs:
-            if need.max_count < need.min_count:
-                raise ValueError("max_count must not be below min_count")
-            if need.tables and not set(need.formats) <= TABULAR:
-                raise ValueError("tables can be required only of Excel or CSV data")
         pinned = [(b.material_id, b.version_no) for b in self.bindings]
         if len(pinned) != len(set(pinned)):
             raise ValueError("a material version may be bound only once")
-        if any(b.need is not None and b.need not in keys for b in self.bindings):
-            raise ValueError("a binding names a need that is not declared")
         if len({b.basis_ref for b in self.bindings}) > 1:
             raise ValueError("all bindings are frozen for one expert version")
         return self

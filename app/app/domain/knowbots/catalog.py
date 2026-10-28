@@ -92,13 +92,24 @@ def _text(value: object, limit: int = 2000) -> str:
     return value.strip()[:limit] if isinstance(value, str) else ""
 
 
+def asks_by_question(manifest: dict[str, Any]) -> bool:
+    """清单 v2：每件委托由第 0 步按你的问题提出要哪些数据、你确认（decisions ⑭）。"""
+    return manifest.get("schema") == "knowbot-manifest/v2"
+
+
 def accepts_user_data(manifest: dict[str, Any]) -> bool:
-    """请它时要不要请的人提供自己的数据：写了数据需求声明的要（SDD 0042 第五节）。"""
-    return bool(data_needs(manifest)) or manifest.get("accepts_user_data") is True
+    """请它时要不要请的人提供自己的数据：写了数据需求声明的（SDD 0042 第五节）、
+    清单 v2 的（按问题提出、你确认）要。"""
+    return (
+        bool(data_needs(manifest))
+        or asks_by_question(manifest)
+        or manifest.get("accepts_user_data") is True
+    )
 
 
 def data_needs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
-    """详情页「需要你提供哪些数据」：清单的数据需求声明（交付时已按外层模型核过）。"""
+    """详情页「需要你提供哪些数据」：v1 清单的数据需求声明（交付时已按外层模型核过）；
+    清单 v2 没有声明。"""
     raw = manifest.get("data_needs")
     needs = []
     for n in raw if isinstance(raw, list) else []:
@@ -125,30 +136,9 @@ def data_needs(manifest: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                     for t in tables
                 ],
-                # 清单 v2 才有的：类型、期间规则、要的读法（SDD 0043 第 3.1 节）
-                **_v2_need(n),
             }
         )
     return needs
-
-
-def _v2_need(n: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(n.get("doc_type"), str):
-        return {}
-    period = _dict(n.get("period"))
-    return {
-        "doc_type": _text(n.get("doc_type"), 32),
-        "period": {
-            "kind": _text(period.get("kind"), 8),
-            "start": _text(period.get("start"), 10) or None,
-            "end": _text(period.get("end"), 10) or None,
-            "count": period.get("count")
-            if isinstance(period.get("count"), int)
-            else None,
-            "disclosed_by_task_date": period.get("disclosed_by_task_date") is True,
-        },
-        "reading": _text(n.get("reading"), 16) or "original",
-    }
 
 
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
@@ -178,9 +168,11 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
                 }
                 for b in bindings
             ],
-            # 写了数据需求声明的（新格式）：请它时按这几样从自己的知识库选
+            # 写了数据需求声明的（v1 新格式）：请它时按这几样从自己的知识库选
             "needs": data_needs(manifest),
-            # 清单 v2：作者绑的数据留在 knowbase，这里只说有几份（不给浏览、下载入口）
+            # 清单 v2：每件委托按你的问题提出要哪些数据、你确认
+            "asks_by_question": asks_by_question(manifest),
+            # 清单 v2：作者挑选的数据留在 knowbase，这里只说有几份（不给浏览、下载入口）
             "bound_count": len(
                 [b for b in manifest.get("bindings") or [] if isinstance(b, dict)]
             ),

@@ -293,6 +293,7 @@ def test_sections_read_what_the_manifest_has() -> None:
     assert owner["data"] == {
         "bundled": [{"dataset_id": "ds-600519", "version": "3"}],
         "needs": [],
+        "asks_by_question": False,
         "bound_count": 0,
         "accepts_user_data": False,
     }
@@ -340,18 +341,12 @@ def test_the_detail_page_says_what_data_you_bring() -> None:
     assert data["bound_count"] == 0
 
 
-def test_a_v2_manifest_shows_type_period_reading_and_how_many_bound() -> None:
+def test_a_v2_manifest_asks_by_question_and_says_how_many_bound() -> None:
+    """清单 v2 没有声明：每件委托按你的问题提出要哪些数据、你确认（decisions ⑭）。"""
     data = expert_sections(manifest_v2(), owner=False)["data"]
-    need = data["needs"][0]
-    assert (need["doc_type"], need["reading"]) == ("annual_report", "table")
-    assert need["period"] == {
-        "kind": "latest",
-        "start": None,
-        "end": None,
-        "count": 3,
-        "disclosed_by_task_date": False,
-    }
-    # 作者绑的数据只说有几份，不列资料编号
+    assert data["needs"] == []
+    assert data["asks_by_question"] is True and data["accepts_user_data"] is True
+    # 作者挑选的数据只说有几份，不列资料编号
     assert data["bound_count"] == 1 and data["bundled"] == []
     assert "m-1" not in str(data)
 
