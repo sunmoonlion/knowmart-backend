@@ -12,10 +12,9 @@ from __future__ import annotations
 
 import re
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
 
 from app.application.errors.exceptions import (
     BadRequestError,
@@ -197,7 +196,8 @@ class KnowbotService:
         )
 
     async def _summonable(self, subject: str, knowbot_id: str) -> KnowbotRecord:
-        """自己的都能请；别人的要平台开了公开、专家公开、发布主体在这个类目上有效。"""
+        """自己的都能请；别人的要平台开了公开、专家公开、发布主体在这个类目上有效、
+        主人的小店没被停（SDD 0018 第十一节第 7 之二小节）。"""
         if not OWNER.fullmatch(subject or ""):
             raise _not_found()
         try:
@@ -217,14 +217,10 @@ class KnowbotService:
                 bot.publisher_id, bot.category, today=self.now().date()
             )
             is not None
+            and await self.repo.owner_shop_open(bot.owner_subject)
         ):
             return bot
         raise _not_found()
-
-    async def list_for_owner(self, owner_subject: str) -> Sequence[KnowbotRecord]:
-        if not OWNER.fullmatch(owner_subject or ""):
-            return []
-        return await self.repo.list_for_owner(owner_subject)
 
     async def stop(
         self,
@@ -288,13 +284,3 @@ class KnowbotService:
                 version=version,
                 outcome=outcome,
             )
-
-
-def version_view(record: KnowbotVersionRecord) -> dict[str, Any]:
-    return {
-        "version": record.version,
-        "runtime": record.manifest.get("runtime"),
-        "digest": record.digest,
-        "status": record.status,
-        "delivered_at": record.delivered_at.isoformat(),
-    }

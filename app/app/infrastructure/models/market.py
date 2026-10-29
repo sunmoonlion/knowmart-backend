@@ -1,7 +1,7 @@
 """供需市场的表（SDD 0018 第十一节）。
 
-知识条目、需求、响应、交易记录、评价、留言、驻场规则、举报、发布主体的证件照片。
-专家条目在 knowbot 表上（knowbots.py）。
+知识条目、需求、响应、交易记录、评价、留言、驻场规则、举报、发布主体的证件照片与变更
+历史、小店。专家条目在 knowbot 表上（knowbots.py）。
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -94,6 +95,8 @@ class Demand(TimestampMixin, Base):
     budget: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     chosen_response_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    # 买家勾了「公开到我的小店」（默认不勾）：勾了才在小店页上显示
+    shop_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class DemandResponse(Base):
@@ -141,6 +144,9 @@ class Trade(Base):
     failure: Mapped[str | None] = mapped_column(String(64))
     # 成交那一刻卖家写的能不能转卖（Fable 评审 P2-16）
     resale_allowed: Mapped[bool | None] = mapped_column(Boolean)
+    # 成交那一刻卖的发布主体（名称、个人或非个人）：主体后来改了，这笔照旧标当时的
+    # （SDD 0018 第十一节第 7 之二小节）
+    seller_publisher: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     created_at: Mapped[datetime] = _now()
 
 
@@ -204,3 +210,65 @@ class MarketReport(Base):
     handled_by: Mapped[str | None] = mapped_column(String(512))
     handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _now()
+
+
+class PublisherChange(Base):
+    """发布主体的变更历史：一店一主体，主体可改，改了要重审、留历史（SDD 0018 第十一节
+    第 7 之二小节）。只记对外的名称与个人 / 非个人，不记实名材料。"""
+
+    __tablename__ = "publisher_change"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    publisher_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("publisher.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+
+class Shop(TimestampMixin, Base):
+    """每个用户一家小店（SDD 0018 第十一节第 7 之二小节；数据拓扑第十一节）。
+
+    处置状态是持久的：停店（suspended）期间公开列表、条目发布、审核转公开、下单、请
+    专家都不过；恢复不动被单独下架的条目，停店也不撤销历史订单。
+    """
+
+    __tablename__ = "shop"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    owner_subject: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(40), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
+    status_note: Mapped[str | None] = mapped_column(Text)
+    status_by: Mapped[str | None] = mapped_column(String(512))
+    status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint("status IN ('open', 'suspended')", name="ck_shop_status"),
+    )
+
+
+class ShopEvent(Base):
+    """小店的留痕：改店名、停店、恢复，谁、什么时候、为什么。"""
+
+    __tablename__ = "shop_event"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    shop_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("shop.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    old_name: Mapped[str | None] = mapped_column(String(40))
+    new_name: Mapped[str | None] = mapped_column(String(40))
+    note: Mapped[str | None] = mapped_column(Text)
+    by_subject: Mapped[str] = mapped_column(String(512), nullable=False)
+    created_at: Mapped[datetime] = _now()
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('renamed', 'suspended', 'restored')", name="ck_shop_event_kind"
+        ),
+    )

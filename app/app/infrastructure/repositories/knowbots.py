@@ -30,6 +30,7 @@ from app.infrastructure.models.knowbots import (
     Publisher,
     PublisherLicense,
 )
+from app.infrastructure.models.market import Shop
 
 
 def _version(row: KnowbotVersion) -> KnowbotVersionRecord:
@@ -77,6 +78,51 @@ def _license_valid(today: date):
             PublisherLicense.valid_until >= today,
         ),
     )
+
+
+def public_to_others(today: date):
+    """别人看得到、请得到的专家（平台开了公开时）：可见范围是公开；发布主体实名审过，
+    类目要证照的还要有审过、没过期的证照（SDD 0018 第十一节第 5 小节；有证照不免主体
+    审核，Astra 评审 F06）；至少有一版是 knowlab 审成公开的（Fable 评审 P2-2）；主人
+    的小店没被停（停店期间不在公开列表、请不了，SDD 0018 第十一节第 7 之二小节）。
+    """
+    approved = exists().where(
+        Publisher.id == Knowbot.publisher_id,
+        Publisher.review_status == "approved",
+        Publisher.real_name_verified.is_(True),
+    )
+    licensed = exists().where(
+        PublisherLicense.publisher_id == Knowbot.publisher_id,
+        PublisherLicense.category == Knowbot.category,
+        _license_valid(today),
+    )
+    shown = exists().where(
+        KnowbotVersion.knowbot_id == Knowbot.id,
+        KnowbotVersion.public_allowed.is_(True),
+    )
+    return and_(
+        Knowbot.visibility == "public",
+        approved,
+        shown,
+        or_(Knowbot.category.in_(NO_LICENSE_CATEGORIES), licensed),
+        ~shop_suspended(Knowbot.owner_subject),
+    )
+
+
+def shop_suspended(owner_column: Any):
+    """这个主人的小店被停了（关联子查询，跟在别的表的主人那一栏上用）。"""
+    return exists().where(
+        Shop.owner_subject == owner_column, Shop.status == "suspended"
+    )
+
+
+async def shop_open(session: AsyncSession, owner_subject: str) -> bool:
+    status = (
+        await session.execute(
+            select(Shop.status).where(Shop.owner_subject == owner_subject)
+        )
+    ).scalar_one_or_none()
+    return status != "suspended"
 
 
 class SqlKnowbotRepository:
@@ -202,35 +248,14 @@ class SqlKnowbotRepository:
     ) -> Sequence[KnowbotRecord]:
         visible = Knowbot.owner_subject == owner_subject
         if public_market:
-            # 发布主体实名审过；类目要证照的还要有审过、没过期的证照（SDD 0018 第十一节
-            # 第 5 小节）。有证照不免主体审核：改了主体资料就要重审（Astra 评审 F06）
-            approved = exists().where(
-                Publisher.id == Knowbot.publisher_id,
-                Publisher.review_status == "approved",
-                Publisher.real_name_verified.is_(True),
-            )
-            licensed = exists().where(
-                PublisherLicense.publisher_id == Knowbot.publisher_id,
-                PublisherLicense.category == Knowbot.category,
-                _license_valid(today),
-            )
-            # 至少有一版是 knowlab 审成公开的（Fable 评审 P2-2）
-            shown = exists().where(
-                KnowbotVersion.knowbot_id == Knowbot.id,
-                KnowbotVersion.public_allowed.is_(True),
-            )
-            visible = or_(
-                visible,
-                and_(
-                    Knowbot.visibility == "public",
-                    approved,
-                    shown,
-                    or_(Knowbot.category.in_(NO_LICENSE_CATEGORIES), licensed),
-                ),
-            )
+            visible = or_(visible, public_to_others(today))
         return await self._with_versions(
             select(Knowbot).where(visible).order_by(Knowbot.created_at, Knowbot.id)
         )
+
+    async def owner_shop_open(self, owner_subject: str) -> bool:
+        """主人的小店没被停（没开过店的也算开着）。"""
+        return await shop_open(self.session, owner_subject)
 
     async def owner_of_source(self, source_ref: str) -> str | None:
         return (

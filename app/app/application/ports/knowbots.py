@@ -109,6 +109,10 @@ class KnowbotRepository(Protocol):
         可见范围是公开、发布主体在这个类目上有审核通过且 today 未过期的资质的。"""
         ...
 
+    async def owner_shop_open(self, owner_subject: str) -> bool:
+        """主人的小店没被停；停店期间别人请不了（SDD 0018 第十一节第 7 之二小节）。"""
+        ...
+
     async def owner_of_source(self, source_ref: str) -> str | None:
         """这个 knowlab 引用对应的分身归谁；还没交付过的回 None。"""
         ...

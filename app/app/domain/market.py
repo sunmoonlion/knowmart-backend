@@ -168,6 +168,9 @@ class DemandIn(Strict):
     data_wanted: str = Field(default="", max_length=4000)
     deadline: date
     budget: Decimal | None = None
+    # 「公开到我的小店」：默认不勾；不勾照样匿名进需求大厅，勾了才在小店页上显示
+    # （SDD 0018 第十一节第 7 之二小节，所有者 10-26）
+    public_to_shop: bool = False
 
     _check_budget = field_validator("budget")(_price)
 
@@ -254,6 +257,37 @@ class ReportDecision(Strict):
 
 class RulesIn(Strict):
     body: str = Field(min_length=1, max_length=50_000)
+
+
+# 小店（SDD 0018 第十一节第 7 之二小节）：店名默认取昵称，可改、留痕，受驻场规则禁止
+# 词约束（不得含「荐股」「推荐」之类）；没有昵称时先叫「小店」
+SHOP_NAME_MAX = 40
+SHOP_NAME_WORDS: tuple[str, ...] = (*FLAGGED_WORDS, "推荐")
+DEFAULT_SHOP_NAME = "小店"
+ShopStatus = Literal["open", "suspended"]
+
+
+class ShopIn(Strict):
+    name: str = Field(min_length=1, max_length=SHOP_NAME_MAX)
+
+
+class ShopDecision(Strict):
+    """运营停店、恢复：写明为什么（留痕）。"""
+
+    note: str = Field(min_length=1, max_length=2000)
+
+
+def shop_name_words(name: str) -> list[str]:
+    """店名里出现的禁止词；有就不收。"""
+    return [w for w in SHOP_NAME_WORDS if w in name]
+
+
+def default_shop_name(nickname: str | None) -> str:
+    """店名默认取昵称；昵称为空、太长截短，含禁止词的不用。"""
+    name = (nickname or "").strip()[:SHOP_NAME_MAX].strip()
+    if not name or shop_name_words(name):
+        return DEFAULT_SHOP_NAME
+    return name
 
 
 def flagged(*texts: str) -> list[str]:

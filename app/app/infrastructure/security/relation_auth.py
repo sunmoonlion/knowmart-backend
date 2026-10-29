@@ -1,8 +1,9 @@
 """按关系校验其他应用的服务令牌（SDD 0027 P1/P2）。
 
-knowmart 接受两种关系：knowlab 交付分身（deliver）、运行方取分身清单（summon，
-现在只有 knowbench）。一种关系可以有多个调用方：`SERVICE_AUTH_<关系>_CALLERS`
-列出调用方，每个调用方一组 `SERVICE_AUTH_<关系>_<调用方>_AUDIENCE`（调用方的
+knowmart 接受四种关系：knowlab 交付专家（deliver）；运行方取专家清单（summon）、
+替用户找专家（catalog）、替用户发需求（demand），这三种现在只有 knowbench。一种
+关系可以有多个调用方：`SERVICE_AUTH_<关系>_CALLERS` 列出调用方，每个调用方一组
+`SERVICE_AUTH_<关系>_<调用方>_AUDIENCE`（调用方的
 client_id，即 Casdoor 给 client_credentials 令牌的 aud）、`_SUBJECT_ALLOWLIST`
 （`admin/<调用方服务应用>`）、`_REQUIRED_SCOPE`（`knowmart:<关系>`），都由部署从
 调用方配置推出来（`common/backend/service-client`）。校验通过后返回调用方是谁，

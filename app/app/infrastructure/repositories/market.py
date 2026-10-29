@@ -17,7 +17,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.knowbots.catalog import CATEGORIES
-from app.infrastructure.models.knowbots import Knowbot, Publisher, PublisherLicense
+from app.infrastructure.models.auth import AuthUser
+from app.infrastructure.models.knowbots import (
+    Knowbot,
+    KnowbotVersion,
+    Publisher,
+    PublisherLicense,
+)
 from app.infrastructure.models.market import (
     Demand,
     DemandResponse,
@@ -25,11 +31,15 @@ from app.infrastructure.models.market import (
     KnowledgeListing,
     MarketMessage,
     MarketReport,
+    PublisherChange,
     PublisherDocument,
+    Shop,
+    ShopEvent,
     Trade,
     TradeRequestAlias,
     TradeReview,
 )
+from app.infrastructure.repositories.knowbots import public_to_others, shop_suspended
 
 # 要证照的类目
 LICENSED = tuple(c.code for c in CATEGORIES if c.license)
@@ -39,6 +49,37 @@ def _row(obj: Any, *, skip: tuple[str, ...] = ()) -> dict[str, Any]:
     return {
         c.key: getattr(obj, c.key) for c in obj.__table__.columns if c.key not in skip
     }
+
+
+def knowledge_on_market(today: date) -> list[Any]:
+    """在知识市场上的条目：上架了；卖家现在仍有资格（主体实名审过，类目要证照的还有
+    有效证照；Astra 评审 F06：不等每天扫表，失去资格的当下就不在市场上）；卖家的小店
+    没被停（SDD 0018 第十一节第 7 之二小节）。"""
+    return [
+        KnowledgeListing.status == "listed",
+        select(Publisher.id)
+        .where(
+            Publisher.id == KnowledgeListing.publisher_id,
+            Publisher.review_status == "approved",
+            Publisher.real_name_verified.is_(True),
+        )
+        .exists(),
+        or_(
+            KnowledgeListing.category.not_in(LICENSED),
+            select(PublisherLicense.id)
+            .where(
+                PublisherLicense.publisher_id == KnowledgeListing.publisher_id,
+                PublisherLicense.category == KnowledgeListing.category,
+                PublisherLicense.review_status == "approved",
+                or_(
+                    PublisherLicense.valid_until.is_(None),
+                    PublisherLicense.valid_until >= today,
+                ),
+            )
+            .exists(),
+        ),
+        ~shop_suspended(KnowledgeListing.seller_subject),
+    ]
 
 
 def _id(value: str | uuid.UUID) -> uuid.UUID | None:
@@ -261,6 +302,203 @@ class SqlMarketRepository:
         ).scalars()
         return [_row(r) for r in rows]
 
+    async def valid_license_categories(
+        self, publisher_id: uuid.UUID, today: date
+    ) -> list[str]:
+        rows = await self.session.execute(
+            select(PublisherLicense.category)
+            .where(
+                PublisherLicense.publisher_id == publisher_id,
+                PublisherLicense.review_status == "approved",
+                or_(
+                    PublisherLicense.valid_until.is_(None),
+                    PublisherLicense.valid_until >= today,
+                ),
+            )
+            .distinct()
+        )
+        return sorted(str(c) for c in rows.scalars())
+
+    async def add_publisher_change(self, fields: dict[str, Any]) -> None:
+        self.session.add(PublisherChange(id=uuid.uuid4(), **fields))
+        await self.session.flush()
+
+    async def publisher_changes(self, publisher_id: str) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(PublisherChange)
+                .where(PublisherChange.publisher_id == _id(publisher_id))
+                .order_by(PublisherChange.created_at, PublisherChange.id)
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
+    # ---------- 小店 ----------
+    async def nickname_of(self, subject: str) -> str | None:
+        row = (
+            await self.session.execute(
+                select(AuthUser.display_name, AuthUser.username)
+                .where(AuthUser.subject == subject)
+                .limit(1)
+            )
+        ).first()
+        if row is None:
+            return None
+        return row[0] or row[1]
+
+    async def shop_of(self, subject: str) -> dict[str, Any] | None:
+        row = (
+            await self.session.execute(
+                select(Shop).where(Shop.owner_subject == subject)
+            )
+        ).scalar_one_or_none()
+        return None if row is None else _row(row)
+
+    async def get_shop(self, shop_id: str) -> dict[str, Any] | None:
+        key = _id(shop_id)
+        row = await self.session.get(Shop, key) if key else None
+        return None if row is None else _row(row)
+
+    async def add_shop(self, subject: str, name: str) -> dict[str, Any]:
+        await self.session.execute(
+            pg_insert(Shop)
+            .values(id=uuid.uuid4(), owner_subject=subject, name=name, status="open")
+            .on_conflict_do_nothing(index_elements=[Shop.owner_subject])
+        )
+        found = await self.shop_of(subject)
+        assert found is not None
+        return found
+
+    async def update_shop(self, shop_id: uuid.UUID, **fields: Any) -> None:
+        await self.session.execute(
+            update(Shop)
+            .where(Shop.id == shop_id)
+            .values(updated_at=func.now(), **fields)
+        )
+
+    async def add_shop_event(self, fields: dict[str, Any]) -> None:
+        self.session.add(ShopEvent(id=uuid.uuid4(), **fields))
+        await self.session.flush()
+
+    async def shop_events(
+        self, shop_id: uuid.UUID, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(ShopEvent)
+                .where(ShopEvent.shop_id == shop_id)
+                .order_by(ShopEvent.created_at.desc(), ShopEvent.id)
+                .limit(limit)
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
+    async def shops_of(self, subjects: Sequence[str]) -> dict[str, dict[str, Any]]:
+        if not subjects:
+            return {}
+        rows = (
+            await self.session.execute(
+                select(Shop).where(Shop.owner_subject.in_(list(set(subjects))))
+            )
+        ).scalars()
+        return {r.owner_subject: _row(r) for r in rows}
+
+    async def all_shops(
+        self, *, q: str | None, status: str | None, limit: int, offset: int
+    ) -> list[dict[str, Any]]:
+        query = select(Shop)
+        if q:
+            query = query.where(or_(Shop.name.ilike(f"%{q}%"), Shop.owner_subject == q))
+        if status:
+            query = query.where(Shop.status == status)
+        rows = (
+            await self.session.execute(
+                query.order_by(Shop.updated_at.desc(), Shop.id)
+                .limit(limit)
+                .offset(offset)
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
+    async def shop_supply(
+        self, *, public_market: bool, today: date, owner: str | None = None
+    ) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        knowledge = select(
+            KnowledgeListing.seller_subject,
+            KnowledgeListing.category,
+            KnowledgeListing.updated_at,
+        ).where(*knowledge_on_market(today))
+        if owner is not None:
+            knowledge = knowledge.where(KnowledgeListing.seller_subject == owner)
+        for who, category, at in (await self.session.execute(knowledge)).all():
+            out.append(
+                {"owner": who, "kind": "knowledge", "category": category, "at": at}
+            )
+        if public_market:
+            experts = select(
+                Knowbot.owner_subject, Knowbot.category, Knowbot.updated_at
+            ).where(public_to_others(today))
+            if owner is not None:
+                experts = experts.where(Knowbot.owner_subject == owner)
+            for who, category, at in (await self.session.execute(experts)).all():
+                out.append(
+                    {"owner": who, "kind": "expert", "category": category, "at": at}
+                )
+        demands = select(Demand.buyer_subject, Demand.created_at).where(
+            Demand.shop_public.is_(True),
+            Demand.status == "open",
+            Demand.deadline >= today,
+        )
+        if owner is not None:
+            demands = demands.where(Demand.buyer_subject == owner)
+        for who, at in (await self.session.execute(demands)).all():
+            out.append({"owner": who, "kind": "demand", "category": None, "at": at})
+        return out
+
+    async def public_experts(self, owner: str, today: date) -> list[dict[str, Any]]:
+        bots = [
+            _row(r)
+            for r in (
+                await self.session.execute(
+                    select(Knowbot)
+                    .where(Knowbot.owner_subject == owner, public_to_others(today))
+                    .order_by(Knowbot.updated_at.desc(), Knowbot.id)
+                )
+            ).scalars()
+        ]
+        if not bots:
+            return []
+        versions = (
+            await self.session.execute(
+                select(KnowbotVersion.knowbot_id, KnowbotVersion.version).where(
+                    KnowbotVersion.knowbot_id.in_([b["id"] for b in bots]),
+                    KnowbotVersion.public_allowed.is_(True),
+                    KnowbotVersion.status == "active",
+                )
+            )
+        ).all()
+        latest: dict[uuid.UUID, str] = {}
+        for bot_id, version in versions:
+            if bot_id not in latest or int(version) > int(latest[bot_id]):
+                latest[bot_id] = version
+        return [{**b, "version": latest.get(b["id"])} for b in bots]
+
+    async def reviews_of_seller(self, subject: str, limit: int) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(TradeReview, Trade)
+                .join(Trade, Trade.id == TradeReview.trade_id)
+                .where(Trade.seller_subject == subject)
+                .order_by(TradeReview.created_at.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [
+            {**_row(review), "title": trade.title, "kind": trade.kind}
+            for review, trade in rows
+        ]
+
     # ---------- 专家条目 ----------
     async def get_knowbot(self, knowbot_id: str) -> dict[str, Any] | None:
         key = _id(knowbot_id)
@@ -340,33 +578,11 @@ class SqlMarketRepository:
         limit: int,
         offset: int,
         today: date,
+        seller: str | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
-        # 上架了，且卖家现在仍有资格：主体实名审过，类目要证照的还有有效证照
-        # （Astra 评审 F06：不等每天扫表，失去资格的当下就不在市场上）
-        where = [
-            KnowledgeListing.status == "listed",
-            select(Publisher.id)
-            .where(
-                Publisher.id == KnowledgeListing.publisher_id,
-                Publisher.review_status == "approved",
-                Publisher.real_name_verified.is_(True),
-            )
-            .exists(),
-            or_(
-                KnowledgeListing.category.not_in(LICENSED),
-                select(PublisherLicense.id)
-                .where(
-                    PublisherLicense.publisher_id == KnowledgeListing.publisher_id,
-                    PublisherLicense.category == KnowledgeListing.category,
-                    PublisherLicense.review_status == "approved",
-                    or_(
-                        PublisherLicense.valid_until.is_(None),
-                        PublisherLicense.valid_until >= today,
-                    ),
-                )
-                .exists(),
-            ),
-        ]
+        where = knowledge_on_market(today)
+        if seller is not None:  # 一家小店的
+            where.append(KnowledgeListing.seller_subject == seller)
         if q:
             like = f"%{q}%"
             where.append(
@@ -404,6 +620,16 @@ class SqlMarketRepository:
                 select(KnowledgeListing)
                 .where(KnowledgeListing.status == "pending")
                 .order_by(KnowledgeListing.updated_at)
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
+    async def listings_up(self) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(KnowledgeListing)
+                .where(KnowledgeListing.status.in_(("pending", "listed")))
+                .order_by(KnowledgeListing.updated_at, KnowledgeListing.id)
             )
         ).scalars()
         return [_row(r) for r in rows]
@@ -462,7 +688,12 @@ class SqlMarketRepository:
         limit: int,
         offset: int,
     ) -> tuple[list[dict[str, Any]], int]:
-        where = [Demand.status == "open", Demand.deadline >= today]
+        # 停了的小店的需求也不在需求大厅（SDD 0018 第十一节第 7 之二小节）
+        where = [
+            Demand.status == "open",
+            Demand.deadline >= today,
+            ~shop_suspended(Demand.buyer_subject),
+        ]
         if kind:
             where.append(Demand.kind == kind)
         if q:

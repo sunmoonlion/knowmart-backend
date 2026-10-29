@@ -233,20 +233,6 @@ async def test_internal_routes_require_their_own_relation() -> None:
 
 
 @pytest.mark.asyncio
-async def test_my_knowbots_lists_only_the_session_owner(wired) -> None:
-    async with client() as c:
-        await _deliver(c, "delivery-0001")
-        await _deliver(c, "delivery-0002", owner="someone-else", ref="lab-bot-2")
-        assert (await c.get("/api/web/v1/knowbots")).status_code == 401
-        c.cookies.set("sunmoonai_knowmart_web_sid", "member")
-        listed = (await c.get("/api/web/v1/knowbots")).json()["knowbots"]
-        assert [k["name"] for k in listed] == ["财务分析与预测"]
-        assert "manifest" not in listed[0]
-        assert listed[0]["versions"][0]["status"] == "active"
-        assert listed[0]["versions"][0]["runtime"] == "knowbench"
-
-
-@pytest.mark.asyncio
 async def test_stop_needs_csrf_and_blocks_new_summons(wired) -> None:
     async with client() as c:
         knowbot = (await _deliver(c, "delivery-0001")).json()["knowbot_id"]

@@ -9,7 +9,10 @@
   认是本应用代办，只给看本应用自己的栏（`GET /columns/knowmart`）。
 - 服务：按跨应用约定的「目标:关系」服务身份，环境变量 `KNOWBASE_INTERNAL_URL`、
   `KNOWBASE_USER_DATA_PURCHASE_SERVICE_*`（关系 user-data-purchase），见
-  service_client.py：成交后请 knowbase 给买家建使用权，只到成交那一版，不复制。
+  service_client.py：成交后请 knowbase 给买家建使用权，只到成交那一版，不复制；
+  后台定时成批核条目里的资料还交给着 knowmart、还能卖（没有卖家本人的令牌，用同一个
+  服务身份；`POST /service/market-offers/check`，knowbase 那头待加，形状见
+  offer_states）。
 knowbase 回 4xx 抛 KnowbaseRefused（带它的 code，调用方转成自己的话）；不可达、5xx 抛
 ServiceUnavailableError。令牌只在内存里，不进日志。
 """
@@ -17,7 +20,7 @@ ServiceUnavailableError。令牌只在内存里，不进日志。
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -34,6 +37,7 @@ from app.infrastructure.external.service_client import ServiceClient, service_re
 BASE = "/api/internal/v2/user-data"
 COLUMN = "knowmart"  # knowbase 里本应用的栏：用户交给 knowmart 的资料
 SALE = "sale"  # 资料的许可档「可以出售」：只有这一档能上架
+OFFER_STATES = frozenset({"offered", "not_for_sale", "gone"})
 
 
 class KnowbaseRefused(Exception):
@@ -89,6 +93,16 @@ class KnowbaseLibrary:
                 "transaction_ref": transaction_ref,
                 "resale_allowed": resale_allowed,
             },
+        )
+
+    async def offer_states(self, items: list[dict[str, str]]) -> Any:
+        """成批核（卖家, 资料）：请求 {"items": [{"seller", "material_id"}]}（1 到 200
+        份），回 {"items": [{"seller", "material_id", "state"}]}，state 是 offered（还
+        交给着 knowmart、是卖家自己的、许可「可以出售」）、not_for_sale（还在，许可
+        改低了）、gone（删了、不是卖家的、不再交给 knowmart）。只读。"""
+        token = await self._service_token("user-data-purchase")
+        return await self._send(
+            "POST", "/service/market-offers/check", token, json={"items": items}
         )
 
     # —— 内部 ——
@@ -183,6 +197,29 @@ class KnowbaseVault:
         except KnowbaseRefused as exc:
             raise BadGatewayError("knowbase refused", code=exc.code) from None
         return [material_view(e) for e in entries or [] if isinstance(e, dict)]
+
+    async def offer_states(
+        self, items: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], str]:
+        if not items:
+            return {}
+        try:
+            answer = await self.client.offer_states(
+                [{"seller": seller, "material_id": m} for seller, m in items]
+            )
+        except KnowbaseRefused as exc:
+            raise BadGatewayError("knowbase refused", code=exc.code) from None
+        rows = answer.get("items") if isinstance(answer, dict) else None
+        asked = set(items)
+        out: dict[tuple[str, str], str] = {}
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            key = (str(row.get("seller")), str(row.get("material_id")))
+            # 只认问过的、认得的状态；别的当没回（不据此下架）
+            if key in asked and row.get("state") in OFFER_STATES:
+                out[key] = str(row["state"])
+        return out
 
     async def purchase(
         self,

@@ -1,5 +1,5 @@
 """knowbase 资料库客户端（契约 user-data/v2，SDD 0043 第 4.3 节）：本人列 knowmart 栏、
-成交以服务身份建使用权。"""
+成交以服务身份建使用权、后台以服务身份成批核资料还在不在。"""
 
 from __future__ import annotations
 
@@ -219,6 +219,48 @@ async def test_the_vault_turns_knowbase_refusals_into_market_errors():
         ]
     )
     assert [m["sellable"] for m in await vault.materials("user-tok")] == [True, False]
+
+
+async def test_offers_are_checked_in_batches_with_the_purchase_relation():
+    """后台没有卖家本人的令牌：用同一个服务身份成批问（knowbase 待加的
+    market-offers/check）；只认问过的、认得的状态。"""
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {"seller": "s", "material_id": "m1", "state": "offered"},
+                    {"seller": "s", "material_id": "m2", "state": "gone"},
+                    {"seller": "s", "material_id": "m3", "state": "something"},
+                    {"seller": "x", "material_id": "m9", "state": "gone"},
+                ]
+            },
+        )
+
+    kb, seen, oidc = client(answer)
+    states = await KnowbaseVault(kb).offer_states(
+        [("s", "m1"), ("s", "m2"), ("s", "m3")]
+    )
+    assert states == {("s", "m1"): "offered", ("s", "m2"): "gone"}
+    assert oidc.calls == ["knowbase:user-data-purchase"]
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/api/internal/v2/user-data/service/market-offers/check"
+    assert json.loads(seen[0].content) == {
+        "items": [
+            {"seller": "s", "material_id": "m1"},
+            {"seller": "s", "material_id": "m2"},
+            {"seller": "s", "material_id": "m3"},
+        ]
+    }
+    assert await KnowbaseVault(kb).offer_states([]) == {}
+    assert len(seen) == 1  # 没有要核的不发请求
+    # knowbase 还没有这个接口（404）或拒了：转成市场的错，后台这一轮不核
+    vault = KnowbaseVault(
+        client(lambda r: httpx.Response(404, json={"code": "not_found"}))[0]
+    )
+    with pytest.raises(BadGatewayError):
+        await vault.offer_states([("s", "m1")])
 
 
 class TradingAuth:

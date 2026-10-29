@@ -58,6 +58,8 @@ class MemoryKnowbots:
         self.licenses: list[dict[str, Any]] = []
         # 没上架那几版的结局（SDD 0037）：（引用，版本号）→（主人，结局）
         self.unlisted: dict[tuple[str, str], tuple[str, str]] = {}
+        # 被停了的小店的主人（SDD 0018 第十一节第 7 之二小节）
+        self.suspended_shops: set[str] = set()
         self.commits = 0
         self.rollbacks = 0
 
@@ -199,10 +201,14 @@ class MemoryKnowbots:
                 and self._qualified(
                     bot.get("publisher_id"), bot.get("category", "uncategorized"), today
                 )
+                and bot["owner_subject"] not in self.suspended_shops
             )
             if mine or public:
                 out.append(self._record(bot))
         return out
+
+    async def owner_shop_open(self, owner_subject: str) -> bool:
+        return owner_subject not in self.suspended_shops
 
     async def owner_of_source(self, source_ref: str) -> str | None:
         for bot in self.bots.values():

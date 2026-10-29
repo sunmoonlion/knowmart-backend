@@ -33,6 +33,8 @@ from app.domain.market import (
     ReviewIn,
     RevokeIn,
     RulesIn,
+    ShopDecision,
+    ShopIn,
 )
 from app.domain.security import Principal
 from app.infrastructure.storage.postgres import get_db_session
@@ -95,6 +97,37 @@ def ok(body: Any, status_code: int = 200) -> JSONResponse:
 async def rules(_: User, svc: Service) -> JSONResponse:
     """驻场规则（平台定）：当前这一版。"""
     return ok(await svc.rules())
+
+
+@web_router.get("/shops")
+async def shops(
+    _: User,
+    svc: Service,
+    q: Annotated[str | None, Query(max_length=40)] = None,
+    category: Annotated[str | None, Query(max_length=64, pattern=r"^[a-z_.]+$")] = None,
+    sort: Literal["time", "name"] = "time",
+    page: Page = 1,
+) -> JSONResponse:
+    """首页：小店列表（有在架供给或公开需求的店）；按店名、类目找，按时间或店名排。"""
+    return ok(await svc.shops(q=q, category=category, sort=sort, page=page))
+
+
+@web_router.get("/shops/{shop_id}")
+async def shop(principal: User, svc: Service, shop_id: Id) -> JSONResponse:
+    """小店详情页（对外）：店主、在架的专家与知识、公开的需求、评价。"""
+    return ok(await svc.shop(principal.subject, shop_id))
+
+
+@web_router.get("/shop")
+async def my_shop(principal: User, svc: Service) -> JSONResponse:
+    """我的小店：店名、处置状态、在不在首页列表上、店主资料、留痕。"""
+    return ok(await svc.my_shop(principal.subject))
+
+
+@web_router.put("/shop")
+async def rename_shop(principal: User, body: ShopIn, svc: Service) -> JSONResponse:
+    """改店名（受驻场规则禁止词约束，留痕）。"""
+    return ok(await svc.rename_shop(principal.subject, body))
 
 
 @web_router.get("/publisher")
@@ -325,7 +358,7 @@ async def attach_offer(
 async def my_trades(
     principal: User, svc: Service, role: Literal["buyer", "seller"] = "buyer"
 ) -> JSONResponse:
-    """我买到的（buyer）、我卖出的（seller）。"""
+    """小店「交易记录」：买入的（buyer）、卖出的（seller）。"""
     return ok(await svc.my_trades(principal.subject, role))
 
 
@@ -381,6 +414,35 @@ class TakeDownIn(BaseModel):
     kind: Literal["expert", "knowledge", "demand", "response", "message"]
     target_id: str = Field(min_length=1, max_length=160)
     note: str = Field(min_length=1, max_length=2000)
+
+
+@admin_router.get("/shops")
+async def admin_shops(
+    admin: Admin,
+    q: Annotated[str | None, Query(max_length=512)] = None,
+    status: Literal["open", "suspended"] | None = None,
+    page: Page = 1,
+) -> JSONResponse:
+    """全部小店：按店名或店主找，可只看停了的；带留痕。"""
+    return ok(await admin.shops(q=q, status=status, page=page))
+
+
+@admin_router.post("/shops/{shop_id}/suspension", status_code=204)
+async def suspend_shop(
+    admin: Admin, operator: Operator, body: ShopDecision, shop_id: Id
+) -> Response:
+    """停店：停着时公开列表、条目发布、审核转公开、下单、请专家都不过；历史订单不撤。"""
+    await admin.suspend_shop(shop_id, body, operator.subject)
+    return Response(status_code=204, headers=NO_STORE)
+
+
+@admin_router.post("/shops/{shop_id}/restoration", status_code=204)
+async def restore_shop(
+    admin: Admin, operator: Operator, body: ShopDecision, shop_id: Id
+) -> Response:
+    """恢复小店：被单独下架的条目不跟着恢复。"""
+    await admin.restore_shop(shop_id, body, operator.subject)
+    return Response(status_code=204, headers=NO_STORE)
 
 
 @admin_router.get("/queue")
@@ -492,5 +554,5 @@ async def trades(admin: Admin, page: Page = 1) -> JSONResponse:
 
 @admin_router.post("/sweep")
 async def sweep(admin: Admin) -> JSONResponse:
-    """手动跑一次资质到期与照片清理（定时任务每天也跑）。"""
-    return ok(await admin.sweep())
+    """手动跑一次资质到期与照片清理、核一遍条目里的资料（定时任务也跑）。"""
+    return ok({**await admin.sweep(), "offers": await admin.check_offers()})

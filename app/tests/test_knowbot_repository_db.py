@@ -94,7 +94,7 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
         )
         assert found.version.digest == first.digest
         assert found.version.manifest == manifest()  # 规范化后与交付的一致
-        [bot] = await svc.list_for_owner(OWNER)
+        [bot] = await svc.repo.list_for_owner(OWNER)
         assert bot.current_version == "2" and bot.name == "第二版"
         assert [v.version for v in bot.versions] == ["1", "2"]
         await svc.stop(owner_subject=OWNER, knowbot_id=str(bot.id), version="1")

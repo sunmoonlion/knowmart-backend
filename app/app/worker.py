@@ -112,4 +112,6 @@ celery_app.conf.beat_schedule = {
     **(celery_app.conf.beat_schedule or {}),
     "durable-delivery": {"task": "app.tasks.durable_delivery.pump", "schedule": 5.0},
     "market-sweep": {"task": "app.tasks.market.sweep", "schedule": 3600.0},
+    # 资料在 knowbase 没了或不再出售时条目即时下架（「待你决定」第 7 条）
+    "market-offers": {"task": "app.tasks.market.check_offers", "schedule": 600.0},
 }

@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     public_market_enabled: bool = False
     # 发布主体身份证号查重摘要的钥匙（HMAC，SOPS 私密配置）；没配时个人入驻回 503
     publisher_id_hash_key: str = ""
+    # 平台的发布主体（非个人）的统一社会信用代码：这个主体审过后，它的小店标「平台」
+    # （SDD 0018 第十一节第 7 之二小节：看发布主体，不看账号）；空就没有平台店
+    platform_publisher_credit_code: str = ""
 
     database_url: str = "postgresql+asyncpg://knowmart:knowmart@localhost:5432/knowmart"
     migration_database_url: str | None = None

@@ -17,12 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors.exceptions import BadRequestError, NotFoundError
 from app.application.services.expert_catalog import ExpertCatalog
-from app.application.services.knowbot_service import KnowbotService, version_view
+from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketService
 from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.market import DemandIn
-from app.domain.security import BrowserSession, Principal
+from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
     ServiceCaller,
     require_catalog_service,
@@ -34,7 +34,6 @@ from app.infrastructure.storage.postgres import get_db_session
 from app.interfaces.http.internal.host_guard import internal_host_only
 from app.interfaces.http.middleware.auth import (
     get_web_browser_session,
-    get_web_current_user,
 )
 from core.config import Settings, get_settings
 
@@ -261,30 +260,6 @@ async def summon(
             "version": found.version.version,
             "digest": found.version.digest,
             "manifest": found.version.manifest,
-        },
-        headers=NO_STORE,
-    )
-
-
-@web_router.get("")
-async def my_knowbots(
-    principal: Annotated[Principal, Depends(get_web_current_user)], svc: Service
-) -> JSONResponse:
-    """我的分身：只有当前用户自己的。不给清单原文。"""
-    bots = await svc.list_for_owner(principal.subject)
-    return JSONResponse(
-        content={
-            "contract_version": CONTRACT_VERSION,
-            "knowbots": [
-                {
-                    "knowbot_id": str(b.id),
-                    "name": b.name,
-                    "tagline": b.tagline,
-                    "current_version": b.current_version,
-                    "versions": [version_view(v) for v in b.versions],
-                }
-                for b in bots
-            ],
         },
         headers=NO_STORE,
     )

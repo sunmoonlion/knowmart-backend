@@ -33,6 +33,18 @@ class FakeMarket:
         self.calls.append(("my_trades", subject, role))
         return []
 
+    async def shops(self, **kw: Any) -> dict[str, Any]:
+        self.calls.append(("shops", kw))
+        return {"items": [], "total": 0, "page": kw["page"], "page_size": 24}
+
+    async def my_shop(self, subject: str) -> dict[str, Any]:
+        self.calls.append(("my_shop", subject))
+        return {"shop": {"name": "小店"}}
+
+    async def rename_shop(self, subject: str, body: Any) -> dict[str, Any]:
+        self.calls.append(("rename_shop", subject, body.name))
+        return {"shop": {"name": body.name}}
+
     async def materials(self, user_token: Any) -> list[dict[str, Any]]:
         self.calls.append(("materials", await user_token()))
         return [{"material_id": "m1", "name": "行业数据.csv", "sellable": True}]
@@ -41,6 +53,12 @@ class FakeMarket:
 class FakeAdmin:
     async def queue(self) -> dict[str, Any]:
         return {"publishers": [], "licenses": [], "knowledge": [], "experts": []}
+
+    async def sweep(self) -> dict[str, Any]:
+        return {"reminded": 0, "expired": 0, "purged": 0}
+
+    async def check_offers(self) -> dict[str, Any]:
+        return {"checked": 1, "delisted": 0, "skipped": None}
 
 
 @pytest.fixture
@@ -132,3 +150,33 @@ async def test_materials_come_from_knowbase_with_the_users_token(market) -> None
             headers={"Origin": ORIGIN, "X-CSRF-Token": CSRF},
         )
         assert refused.status_code == 422
+
+
+async def test_shop_endpoints(market) -> None:
+    """小店：首页列表按店名、类目找，按时间或店名排；我的小店改店名要 CSRF。"""
+    async with client() as c:
+        listed = await c.get(f"{BASE}/shops", params={"q": "张", "sort": "name"})
+        assert listed.status_code == 200
+        assert market.calls[-1] == (
+            "shops",
+            {"q": "张", "category": None, "sort": "name", "page": 1},
+        )
+        assert (
+            await c.get(f"{BASE}/shops", params={"sort": "sales"})
+        ).status_code == 422
+        assert (await c.get(f"{BASE}/shop")).json()["shop"]["name"] == "小店"
+        assert (await c.put(f"{BASE}/shop", json={"name": "甲店"})).status_code == 403
+        headers = {"Origin": ORIGIN, "X-CSRF-Token": CSRF}
+        renamed = await c.put(f"{BASE}/shop", json={"name": "甲店"}, headers=headers)
+        assert renamed.json()["shop"]["name"] == "甲店"
+        assert market.calls[-1] == ("rename_shop", "user-123", "甲店")
+
+
+async def test_the_manual_sweep_also_checks_offers(market) -> None:
+    async with client("operator", "sunmoonai_knowmart_admin_sid") as c:
+        swept = await c.post(
+            "/api/admin/v1/knowmart/market/sweep",
+            headers={"Origin": "http://localhost:5173", "X-CSRF-Token": CSRF},
+        )
+        assert swept.status_code == 200, swept.text
+        assert swept.json()["offers"]["checked"] == 1

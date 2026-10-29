@@ -70,7 +70,7 @@ async def test_current_version_only_moves_forward() -> None:
     svc, repo = service()
     await deliver(svc, "delivery-0002", manifest("2", name="第二版"))
     await deliver(svc, "delivery-0001", manifest("1", name="第一版"))
-    [bot] = await svc.list_for_owner(OWNER)
+    [bot] = await svc.repo.list_for_owner(OWNER)
     assert bot.current_version == "2" and bot.name == "第二版"
     assert [v.version for v in bot.versions] == ["1", "2"]
 
@@ -137,7 +137,7 @@ async def test_stopped_version_cannot_be_summoned_and_others_cannot_stop() -> No
         await svc.summon(
             owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
         )
-    [bot] = await svc.list_for_owner(OWNER)
+    [bot] = await svc.repo.list_for_owner(OWNER)
     assert bot.versions[0].status == "stopped"
 
 
@@ -156,7 +156,7 @@ async def test_knowlab_experts_are_stopped_only_by_knowlab() -> None:
         await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1")
     assert refused.value.code == "stop_in_knowlab"
     await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1", by_knowlab=True)
-    [bot] = await svc.list_for_owner(OWNER)
+    [bot] = await svc.repo.list_for_owner(OWNER)
     assert bot.versions[0].status == "stopped"
 
 
@@ -214,20 +214,6 @@ async def test_unlisted_outcomes_are_written_per_version_and_checked() -> None:
             version="1",
             outcome="declined",
         )
-
-
-@pytest.mark.asyncio
-async def test_list_shows_only_the_owners_knowbots() -> None:
-    svc, repo = service()
-    await deliver(svc, "delivery-0001", manifest())
-    await svc.deliver(
-        delivery_id="delivery-0002",
-        owner_subject=OTHER,
-        knowbot_ref="lab-bot-2",
-        manifest=manifest(),
-    )
-    assert [b.source_ref for b in await svc.list_for_owner(OWNER)] == ["lab-bot-1"]
-    assert await svc.list_for_owner("bad owner") == []
 
 
 @pytest.mark.asyncio

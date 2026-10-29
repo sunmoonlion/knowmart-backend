@@ -33,21 +33,25 @@ def expert_catalog(session: AsyncSession) -> ExpertCatalog:
     )
 
 
+def _vault() -> KnowbaseVault | None:
+    """knowbase 资料库（user-data/v2）；没配就卖不了、买不了知识，后台也不核资料。"""
+    if not os.environ.get("KNOWBASE_INTERNAL_URL", "").strip():
+        return None
+    return KnowbaseVault(KnowbaseLibrary())
+
+
 def market_service(session: AsyncSession) -> MarketService:
-    """供需市场（SDD 0018 第十一节）：选资料、成交建使用权经 knowbase（user-data/v2；
-    没配就卖不了、买不了知识）。"""
-    vault = (
-        KnowbaseVault(KnowbaseLibrary())
-        if os.environ.get("KNOWBASE_INTERNAL_URL", "").strip()
-        else None
-    )
+    """供需市场（SDD 0018 第十一节）：选资料、成交建使用权经 knowbase。"""
+    settings = get_settings()
     return MarketService(
         SqlMarketRepository(session),
         SqlKnowbotRepository(session),
-        vault,
-        id_hash_key=get_settings().publisher_id_hash_key,
+        _vault(),
+        id_hash_key=settings.publisher_id_hash_key,
+        public_market=settings.public_market_enabled,
+        platform_credit_code=settings.platform_publisher_credit_code,
     )
 
 
 def market_admin(session: AsyncSession) -> MarketAdmin:
-    return MarketAdmin(SqlMarketRepository(session))
+    return MarketAdmin(SqlMarketRepository(session), vault=_vault())
