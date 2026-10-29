@@ -33,7 +33,7 @@ from app.domain.security import Principal
 from app.infrastructure.security.oidc import OidcProviderClient
 from core.config import Settings, get_settings
 
-Relation = Literal["deliver", "summon"]
+Relation = Literal["deliver", "summon", "catalog", "demand"]
 
 
 CALLER = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
@@ -213,3 +213,19 @@ async def require_summon_service(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> ServiceCaller:
     return await relation_verifier("summon").verify(_bearer(authorization))
+
+
+async def require_catalog_service(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> ServiceCaller:
+    """运行方替用户「找专家」：
+    这个用户请得动的专家的公开信息（请专家方案设计第 4.9 节）。"""
+    return await relation_verifier("catalog").verify(_bearer(authorization))
+
+
+async def require_demand_service(
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> ServiceCaller:
+    """运行方替用户发需求：用户在运行方页面上看过描述、
+    点了「发布」（第 4.9 节第 6 条）。"""
+    return await relation_verifier("demand").verify(_bearer(authorization))

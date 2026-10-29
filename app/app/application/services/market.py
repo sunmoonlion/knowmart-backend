@@ -366,6 +366,11 @@ class MarketService:
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] == buyer:
             return None
+        ref = f"{bot['id']}@{version}"
+        # 同一个人请同一版只记一次：knowmart 网页「请这位」与运行方钉住
+        # （AI 替他请的也走这里）都会到这里（decisions 10-29「AI 请专家」）
+        if ref in await self.expert_refs_bought(buyer):
+            return None
         demand_id = await self._demand_offering(buyer, str(bot["id"]))
         async with self.repo.transaction():
             trade = await self.repo.add_trade(
@@ -383,6 +388,32 @@ class MarketService:
             if demand_id is not None:
                 await self.repo.update_demand(demand_id, status="closed")
             return trade_view(trade, viewer=buyer)
+
+    async def expert_refs_bought(self, buyer: str) -> set[str]:
+        """这个人请过（记了成交）的专家版本：{knowbot_id@version}。"""
+        return {
+            str(t["listing_ref"])
+            for t in await self.repo.trades(buyer=buyer, limit=1000)
+            if t["kind"] == "expert"
+        }
+
+    async def expert_terms(self, buyer: str, entries: list[Row]) -> list[Row]:
+        """给「找专家」的每位补上价格与免不免费请（第 4.9 节第 3 条）：作者是他自己、
+        价格
+        为零或没标价、他请过这一版，都不用另付钱。本期不收钱，价格照条目上写的给他看。"""
+        bought = await self.expert_refs_bought(buyer)
+        out = []
+        for entry in entries:
+            bot = await self.repo.get_knowbot(entry["knowbot_id"])
+            price = None if bot is None else bot["price"]
+            free = (
+                entry["owned"]
+                or price is None
+                or price == 0
+                or f"{entry['knowbot_id']}@{entry['version']}" in bought
+            )
+            out.append({**entry, "price": _money(price), "free": bool(free)})
+        return out
 
     async def _demand_offering(self, buyer: str, knowbot_id: str) -> uuid.UUID | None:
         for demand in await self.repo.demands_of(buyer):

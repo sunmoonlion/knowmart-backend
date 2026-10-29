@@ -16,14 +16,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.errors.exceptions import BadRequestError, NotFoundError
+from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService, version_view
 from app.application.services.market import MarketService
-from app.bootstrap.knowbots import knowbot_service, market_service
+from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
+from app.domain.market import DemandIn
 from app.domain.security import BrowserSession, Principal
 from app.infrastructure.security.relation_auth import (
     ServiceCaller,
+    require_catalog_service,
     require_deliver_service,
+    require_demand_service,
     require_summon_service,
 )
 from app.infrastructure.storage.postgres import get_db_session
@@ -175,6 +179,49 @@ async def set_unlisted(
     return Response(status_code=204, headers=NO_STORE)
 
 
+def catalog_for_request(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> ExpertCatalog:
+    return expert_catalog(session)
+
+
+@internal_router.get("/owners/{owner_subject}/catalog")
+async def runtime_catalog(
+    caller: Annotated[ServiceCaller, Depends(require_catalog_service)],
+    catalog: Annotated[ExpertCatalog, Depends(catalog_for_request)],
+    market: Annotated[MarketService, Depends(market_for_request)],
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+) -> JSONResponse:
+    """运行方替用户「找专家」（请专家方案设计第 4.9 节）：这个用户请得动、
+    运行方是调用方的
+    专家，各最新一版的公开信息、价格、免不免费请；不排序、不加权（按名称）。"""
+    entries = await catalog.runtime_catalog(owner_subject, caller.caller)
+    return JSONResponse(
+        content={
+            "contract_version": CONTRACT_VERSION,
+            "experts": await market.expert_terms(owner_subject, entries),
+        },
+        headers=NO_STORE,
+    )
+
+
+@internal_router.post("/owners/{owner_subject}/demands", status_code=201)
+async def demand_for_user(
+    _: Annotated[ServiceCaller, Depends(require_demand_service)],
+    body: DemandIn,
+    market: Annotated[MarketService, Depends(market_for_request)],
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+) -> JSONResponse:
+    """运行方替用户发需求：用户在运行方页面看过描述、点了「发布」（第 4.9 节第 6 条）。
+    需求记在这个用户名下，和他在 knowmart 上自己发的一样。"""
+    found = await market.create_demand(owner_subject, body)
+    return JSONResponse(
+        status_code=201,
+        content={"contract_version": CONTRACT_VERSION, "demand": found},
+        headers=NO_STORE,
+    )
+
+
 def _split_ref(ref: str) -> tuple[str, str]:
     knowbot_id, sep, version = ref.partition("@")
     if not sep or not knowbot_id or not version:
@@ -186,10 +233,12 @@ def _split_ref(ref: str) -> tuple[str, str]:
 async def summon(
     caller: Annotated[ServiceCaller, Depends(require_summon_service)],
     svc: Service,
+    market: Annotated[MarketService, Depends(market_for_request)],
     owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
     knowbot_ref: Annotated[str, Path(min_length=3, max_length=160)],
 ) -> JSONResponse:
-    """运行方「请」：这个所有者的这一版清单原文与摘要。
+    """运行方「请」：这个所有者的这一版清单原文与摘要。请的是别人的，记一笔成交（同一个人
+    同一版只记一次；AI 替他请的也是这样，decisions 10-29）。
 
     别人的、停用的、没有的、运行方不是这个调用方的，都是 404。
     """
@@ -199,6 +248,9 @@ async def summon(
         knowbot_id=knowbot_id,
         version=version,
         runtime=caller.caller,
+    )
+    await market.record_summon(
+        buyer=owner_subject, knowbot_id=str(found.knowbot_id), version=version
     )
     return JSONResponse(
         content={

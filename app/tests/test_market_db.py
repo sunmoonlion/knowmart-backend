@@ -21,6 +21,7 @@ from app.application.errors.exceptions import (
     NotFoundError,
     ServiceUnavailableError,
 )
+from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketAdmin, MarketService
 from app.domain.market import (
@@ -297,12 +298,33 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
             )
 
     async def trade(svc: MarketService, admin: MarketAdmin):
+        # 「找专家」看的（decisions 10-29「AI 请专家」）：公开信息、价格、免不免费请
+        async with db() as session:
+            catalog = ExpertCatalog(
+                SqlKnowbotRepository(session), public_market=True, now=lambda: NOW
+            )
+            seen = await catalog.runtime_catalog(BUYER, "knowbench")
+            assert await catalog.runtime_catalog(BUYER, "elsewhere") == []
+        [entry] = await svc.expert_terms(BUYER, seen)
+        assert (entry["knowbot_id"], entry["version"], entry["owned"]) == (
+            str(bot),
+            "1",
+            False,
+        )
+        assert set(entry["scope"]) == {"does", "does_not", "elsewhere"}
+        assert (entry["price"], entry["free"]) == ("9.90", False)
         assert (
             await svc.record_summon(buyer=SELLER, knowbot_id=str(bot), version="1")
             is None
         )
         made = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
         assert made and made["price"] == "9.90" and made["listing_ref"] == f"{bot}@1"
+        # 同一个人请同一版只记一次；请过的这一版再找就算免费
+        assert (
+            await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+            is None
+        )
+        assert (await svc.expert_terms(BUYER, seen))[0]["free"] is True
         await svc.review(BUYER, made["trade_id"], ReviewIn(rating=4, text="好用"))
         with pytest.raises(ConcurrencyConflictError):
             await svc.review(BUYER, made["trade_id"], ReviewIn(rating=5))

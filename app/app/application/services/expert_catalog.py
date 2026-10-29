@@ -220,6 +220,46 @@ class ExpertCatalog:
             },
         }
 
+    async def runtime_catalog(
+        self, owner_subject: str, runtime: str
+    ) -> list[dict[str, Any]]:
+        """运行方替用户「找专家」时看的（请专家方案设计第 4.9 节第 2 条）：
+        这个用户请得动、
+        运行方是这个调用方的专家，各取最新一版能请的；只给公开信息——名称、一句话、
+        接什么 / 不接什么 / 不接的去哪问（清单的 `pack.scope`）、版本、类目。不排序、
+        不加权：
+        按名称排，匹配由用户自己的模型按专家自述的范围做。"""
+        out: list[dict[str, Any]] = []
+        for bot in await self._visible(owner_subject):
+            usable = [
+                v
+                for v in bot.versions
+                if v.status == "active"
+                and (bot.owner_subject == owner_subject or v.public_allowed)
+                and v.manifest.get("runtime") == runtime
+            ]
+            if not usable:
+                continue
+            latest = max(usable, key=lambda v: int(v.version))
+            pack = latest.manifest.get("pack")
+            scope = pack.get("scope") if isinstance(pack, dict) else None
+            scope = scope if isinstance(scope, dict) else {}
+            out.append(
+                {
+                    "knowbot_id": str(bot.id),
+                    "name": bot.name,
+                    "tagline": bot.tagline,
+                    "version": latest.version,
+                    "category": bot.category,
+                    "scope": {
+                        k: str(scope.get(k) or "")[:2000]
+                        for k in ("does", "does_not", "elsewhere")
+                    },
+                    "owned": bot.owner_subject == owner_subject,
+                }
+            )
+        return sorted(out, key=lambda e: (e["name"], e["knowbot_id"]))
+
 
 def _gaps(versions: Sequence[KnowbotVersionRecord]) -> list[str]:
     """上架了的版本号里缺的那几个，新的在前；版本号离谱地大时不列（防一页几十万行）。"""

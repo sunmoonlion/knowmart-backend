@@ -9,7 +9,9 @@ import app.interfaces.http.middleware.auth as auth_middleware
 from app.application.services.knowbot_service import KnowbotService
 from app.infrastructure.security.relation_auth import (
     ServiceCaller,
+    require_catalog_service,
     require_deliver_service,
+    require_demand_service,
     require_summon_service,
 )
 from app.interfaces.endpoints import knowbot_routes
@@ -285,3 +287,57 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
         other = f"/api/web/v1/knowbots/{knowbot}/versions/9/summon-return"
         missing = await c.post(other, json={"from": "knowbench"}, headers=headers)
         assert missing.status_code == 404
+
+
+class FakeCatalog:
+    async def runtime_catalog(self, owner: str, runtime: str):  # type: ignore[no-untyped-def]
+        assert (owner, runtime) == (OWNER, "knowbench")
+        return [{"knowbot_id": "k1", "version": "2", "owned": False}]
+
+
+class FakeMarket(Summons):
+    async def expert_terms(self, buyer, entries):  # type: ignore[no-untyped-def]
+        return [{**e, "price": "5.00", "free": False} for e in entries]
+
+    async def create_demand(self, subject, body):  # type: ignore[no-untyped-def]
+        self.calls.append({"demand": body.title, "subject": subject})
+        return {"demand_id": "d1", "title": body.title}
+
+
+@pytest.mark.asyncio
+async def test_find_expert_catalog_and_demands_for_the_user(wired) -> None:
+    """运行方替用户「找专家」、替他发需求（请专家方案设计第 4.9 节）：按关系认调用方，
+    记在这个用户名下。"""
+    market = FakeMarket()
+    app.dependency_overrides[knowbot_routes.catalog_for_request] = FakeCatalog
+    app.dependency_overrides[knowbot_routes.market_for_request] = lambda: market
+    app.dependency_overrides[require_catalog_service] = lambda: _caller("knowbench")
+    app.dependency_overrides[require_demand_service] = lambda: _caller("knowbench")
+    base = f"/api/internal/v1/knowmart/owners/{OWNER}"
+    async with client() as c:
+        got = await c.get(f"{base}/catalog")
+        assert got.status_code == 200
+        assert got.json()["experts"] == [
+            {
+                "knowbot_id": "k1",
+                "version": "2",
+                "owned": False,
+                "price": "5.00",
+                "free": False,
+            }
+        ]
+        made = await c.post(
+            f"{base}/demands",
+            json={
+                "kind": "expert",
+                "title": "每季度对比电池公司毛利率",
+                "problem": "按固定口径对比几家电池公司的毛利率并预测下季",
+                "deadline": "2099-01-01",
+            },
+        )
+        assert made.status_code == 201
+        assert market.calls == [
+            {"demand": "每季度对比电池公司毛利率", "subject": OWNER}
+        ]
+    async with client("http://testserver") as c:  # 公网来的当没有
+        assert (await c.get(f"{base}/catalog")).status_code == 404
