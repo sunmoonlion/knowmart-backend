@@ -180,8 +180,11 @@ async def knowledge_market(
 
 
 @web_router.get("/knowledge/mine")
-async def my_listings(principal: User, svc: Service) -> JSONResponse:
-    return ok(await svc.my_listings(principal.subject))
+async def my_listings(
+    principal: User, svc: Service, token: Annotated[Any, Depends(_token)]
+) -> JSONResponse:
+    """我的条目；用到的资料没了或不再出售的，顺带自动下架、写明原因。"""
+    return ok(await svc.my_listings(principal.subject, token))
 
 
 @web_router.get("/knowledge/materials")

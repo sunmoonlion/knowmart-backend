@@ -37,7 +37,7 @@ def _run(connection, *, target: bool, down: bool = False) -> None:
     """target=False：跑到这一版之前；target=True：只跑这一版（down 跑 downgrade）。"""
     with Operations.context(MigrationContext.configure(connection)):
         for path in sorted((ROOT / "alembic/versions").glob("20*.py")):
-            if (path.stem == TARGET) != target:
+            if path.stem > TARGET or (path.stem == TARGET) != target:
                 continue
             module = _module(path)
             module.downgrade() if down else module.upgrade()

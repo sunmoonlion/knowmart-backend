@@ -129,9 +129,6 @@ async def test_filters_sort_and_pages() -> None:
     assert names(await svc.list(ME, CatalogQuery(q="财报"))) == ["甲 旧专家"]
     assert names(await svc.list(ME, CatalogQuery(q="预测"))) == ["乙 新专家"]
     assert "甲 旧专家" not in names(await svc.list(ME, CatalogQuery(updated="30d")))
-    # 清单 v2 的专家都按你的问题要你的数据（decisions ⑭）
-    assert len(names(await svc.list(ME, CatalogQuery(data="user")))) == 3
-    assert names(await svc.list(ME, CatalogQuery(data="own"))) == []
     assert names(await svc.list(ME, CatalogQuery(sort="name"))) == [
         "丙 要你的数据",
         "乙 新专家",
@@ -288,7 +285,6 @@ def test_sections_read_what_the_manifest_has() -> None:
     assert owner["data"] == {
         "asks_by_question": True,
         "bound_count": 1,
-        "accepts_user_data": True,
     }
     assert owner["delivers"] == [{"step": "成稿", "file": "底稿/成稿.md"}]
     assert [s["title"] for s in owner["steps"]] == ["取数", "成稿"]
@@ -303,7 +299,7 @@ def test_sections_read_what_the_manifest_has() -> None:
 def test_a_v2_manifest_asks_by_question_and_says_how_many_bound() -> None:
     """清单 v2 没有声明：每件委托按你的问题提出要哪些数据、你确认（decisions ⑭）。"""
     data = expert_sections(manifest(), owner=False)["data"]
-    assert data["asks_by_question"] is True and data["accepts_user_data"] is True
+    assert data["asks_by_question"] is True
     # 作者挑选的数据只说有几份，不列资料编号
     assert data["bound_count"] == 1
     assert "m-1" not in str(data)

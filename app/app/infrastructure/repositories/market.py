@@ -592,7 +592,7 @@ class SqlMarketRepository:
             .on_conflict_do_nothing()
         )
 
-    async def copying_trade(
+    async def granting_trade(
         self, buyer: str, request_digest: str
     ) -> dict[str, Any] | None:
         """这个买家同样参数、还没办完的那一笔（换了幂等键重来时接着做）。"""
@@ -602,7 +602,7 @@ class SqlMarketRepository:
                 .where(
                     Trade.buyer_subject == buyer,
                     Trade.request_digest == request_digest,
-                    Trade.status == "copying",
+                    Trade.status == "granting",
                 )
                 .order_by(Trade.created_at)
                 .limit(1)
@@ -633,9 +633,9 @@ class SqlMarketRepository:
         seller: str | None = None,
         limit: int = 200,
         offset: int = 0,
-        copying: bool = False,
+        granting: bool = False,
     ) -> list[dict[str, Any]]:
-        where = [] if copying else [Trade.status != "copying"]
+        where = [] if granting else [Trade.status != "granting"]
         if buyer is not None:
             where.append(Trade.buyer_subject == buyer)
         if seller is not None:

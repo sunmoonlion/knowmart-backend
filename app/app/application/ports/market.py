@@ -102,7 +102,7 @@ class MarketRepository(Protocol):
     async def add_request_alias(
         self, buyer: str, request_key: str, trade_id: uuid.UUID
     ) -> None: ...
-    async def copying_trade(self, buyer: str, request_digest: str) -> Row | None: ...
+    async def granting_trade(self, buyer: str, request_digest: str) -> Row | None: ...
     async def update_trade(self, trade_id: uuid.UUID, **fields: Any) -> None: ...
     async def get_trade(
         self, trade_id: str | uuid.UUID, *, for_update: bool = False
@@ -114,9 +114,9 @@ class MarketRepository(Protocol):
         seller: str | None = None,
         limit: int = 200,
         offset: int = 0,
-        copying: bool = False,
+        granting: bool = False,
     ) -> list[Row]:
-        """成交记录；copying 时连还没办完的也列（运营对账用）。"""
+        """成交记录；granting 时连还没办完的也列（运营对账用）。"""
         ...
 
     async def bought_without_resale(self, buyer: str) -> set[str]: ...

@@ -76,7 +76,7 @@ async def test_others_experts_are_not_found_and_bad_params_are_refused(repo) -> 
         assert (
             await c.get("/api/web/v1/knowmart/experts/not-a-uuid")
         ).status_code == 404
-        for query in ("data=everything", "sort=price", "page=0", "category=BAD!"):
+        for query in ("updated=forever", "sort=price", "page=0", "category=BAD!"):
             response = await c.get(f"/api/web/v1/knowmart/experts?{query}")
             assert response.status_code == 422, query
 

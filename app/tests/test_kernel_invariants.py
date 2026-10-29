@@ -53,12 +53,14 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20261024_0008_unlisted_versions.py",
         "20261025_0009_auth_user_by_subject.py",
         "20261028_0010_drop_manifest_v1.py",
+        "20261029_0011_trade_granted_delist_reason.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert sum("down_revision = None" in content for content in contents) == 1
     assert 'down_revision = "20260726_0001"' in contents[1]
     assert 'down_revision = "20261024_0008"' in contents[8]
     assert 'down_revision = "20261025_0009"' in contents[9]
+    assert 'down_revision = "20261028_0010"' in contents[10]
 
 
 def test_runtime_image_context_excludes_credentials_and_tests() -> None:

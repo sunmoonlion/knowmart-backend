@@ -39,7 +39,6 @@ async def experts(
     svc: Catalog,
     category: Annotated[str | None, Query(max_length=64, pattern=r"^[a-z_.]+$")] = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
-    data: Literal["all", "own", "user"] = "all",
     updated: Literal["any", "7d", "30d"] = "any",
     sort: Literal["updated", "name"] = "updated",
     page: Annotated[int, Query(ge=1, le=10000)] = 1,
@@ -47,9 +46,7 @@ async def experts(
     """首页：当前用户看得到的专家，按筛选条件筛过、排过、分好页；附类目与数量。"""
     found = await svc.list(
         principal.subject,
-        CatalogQuery(
-            category=category, q=q, data=data, updated=updated, sort=sort, page=page
-        ),
+        CatalogQuery(category=category, q=q, updated=updated, sort=sort, page=page),
     )
     return JSONResponse(
         content={"contract_version": CONTRACT_VERSION, **found}, headers=NO_STORE

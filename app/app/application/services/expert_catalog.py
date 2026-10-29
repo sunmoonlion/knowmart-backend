@@ -28,7 +28,6 @@ from app.domain.knowbots.catalog import (
     BY_CODE,
     CATEGORIES,
     DEFAULT_CATEGORY,
-    accepts_user_data,
     category_view,
     expert_sections,
     in_category,
@@ -41,7 +40,6 @@ KNOWLAB_REF = "knowlab-"  # knowlab 交付时的分身引用都这样开头
 MAX_GAP_SCAN = 1000
 UPDATED_WITHIN = {"7d": timedelta(days=7), "30d": timedelta(days=30)}
 
-DataFilter = Literal["all", "own", "user"]
 UpdatedFilter = Literal["any", "7d", "30d"]
 SortOrder = Literal["updated", "name"]
 
@@ -50,7 +48,6 @@ SortOrder = Literal["updated", "name"]
 class CatalogQuery:
     category: str | None = None  # 二级或一级类目代码
     q: str | None = None
-    data: DataFilter = "all"  # own = 只用专家自带数据；user = 需要你提供数据
     updated: UpdatedFilter = "any"
     sort: SortOrder = "updated"
     page: int = 1
@@ -102,11 +99,6 @@ class ExpertCatalog:
             return False
         words = (query.q or "").strip().lower()
         if words and words not in f"{bot.name}\n{bot.tagline}".lower():
-            return False
-        takes_data = accepts_user_data(latest.manifest)
-        if query.data == "own" and takes_data:
-            return False
-        if query.data == "user" and not takes_data:
             return False
         window = UPDATED_WITHIN.get(query.updated)
         if window is not None and latest.delivered_at < self.now() - window:

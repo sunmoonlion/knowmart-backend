@@ -77,6 +77,8 @@ class KnowledgeListing(TimestampMixin, Base):
     review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_by: Mapped[str | None] = mapped_column(String(512))
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # 资料没了（item_gone）或不再出售（item_not_for_sale）时自动下架的原因，给卖家看
+    delist_reason: Mapped[str | None] = mapped_column(String(32))
 
 
 class Demand(TimestampMixin, Base):
@@ -123,13 +125,13 @@ class Trade(Base):
     price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     # v1 时买知识复制进的应用；user-data/v2 不分区，新成交为空，旧的留作历史
     target_app: Mapped[str | None] = mapped_column(String(16))
-    copied: Mapped[list[dict[str, Any]]] = mapped_column(
+    granted: Mapped[list[dict[str, Any]]] = mapped_column(
         JSONB, nullable=False, default=list
     )
     demand_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("demand.id", ondelete="SET NULL")
     )
-    # 买知识：办理中（copying，v1 时是复制）/ 成交；幂等键与参数摘要；要建使用权的几份
+    # 买知识：办理中（granting）/ 成交；幂等键与参数摘要；要建使用权的几份
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="done")
     request_key: Mapped[str | None] = mapped_column(String(64))
     request_digest: Mapped[str | None] = mapped_column(String(64))

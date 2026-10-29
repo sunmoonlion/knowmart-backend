@@ -97,11 +97,6 @@ def asks_by_question(manifest: dict[str, Any]) -> bool:
     return manifest.get("schema") == "knowbot-manifest/v2"
 
 
-def accepts_user_data(manifest: dict[str, Any]) -> bool:
-    """请它时要不要请的人提供自己的数据：清单 v2 都要（按问题提出、你确认）。"""
-    return asks_by_question(manifest)
-
-
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
     """详情页的各块。所有者另外看得到方法的步骤（名字与一句话），别人看不到。"""
     pack = _dict(manifest.get("pack"))
@@ -127,7 +122,6 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
             "bound_count": len(
                 [b for b in manifest.get("bindings") or [] if isinstance(b, dict)]
             ),
-            "accepts_user_data": accepts_user_data(manifest),
         },
         "delivers": [
             {

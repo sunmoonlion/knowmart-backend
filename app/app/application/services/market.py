@@ -376,7 +376,7 @@ class MarketService:
                     "listing_ref": f"{bot['id']}@{version}",
                     "title": f"{bot['name']} 第 {version} 版",
                     "price": bot["price"],
-                    "copied": [],
+                    "granted": [],
                     "demand_id": demand_id,
                 }
             )
@@ -458,6 +458,7 @@ class MarketService:
                 price=body.price,
                 status="draft",
                 review_note=None,
+                delist_reason=None,
             )
         return await self.listing(subject, listing_id)
 
@@ -469,7 +470,10 @@ class MarketService:
         publisher = await self._qualified(subject, listing["category"])
         async with self.repo.transaction():
             await self.repo.update_listing(
-                listing["id"], status="pending", publisher_id=publisher["id"]
+                listing["id"],
+                status="pending",
+                publisher_id=publisher["id"],
+                delist_reason=None,
             )
         return await self.listing(subject, listing_id)
 
@@ -479,14 +483,46 @@ class MarketService:
         if listing["status"] not in ("pending", "listed"):
             raise _conflict("This listing is not up", "listing_state")
         async with self.repo.transaction():
-            await self.repo.update_listing(listing["id"], status="delisted")
+            await self.repo.update_listing(
+                listing["id"], status="delisted", delist_reason=None
+            )
         return await self.listing(subject, listing_id)
 
-    async def my_listings(self, subject: str) -> list[Row]:
-        return [
-            listing_view(item, viewer=subject)
-            for item in await self.repo.listings_of(subject)
-        ]
+    async def my_listings(
+        self, subject: str, user_token: UserToken | None = None
+    ) -> list[Row]:
+        """卖家自己的条目。带着本人令牌来时顺带核一遍待审、在架的：用到的资料不在
+        knowbase 的 knowmart 栏了、或不再出售，就自动下架、写明原因（所有者 10-29）。
+        knowbase 一时连不上就不核，条目照常列。"""
+        listings = await self.repo.listings_of(subject)
+        up = [x for x in listings if x["status"] in ("pending", "listed")]
+        if up and user_token is not None and self.vault is not None:
+            try:
+                offered = {
+                    m["material_id"]: m
+                    for m in await self.vault.materials(await user_token())
+                }
+            except AppException:
+                offered = None
+            if offered is not None:
+                for listing in up:
+                    reason = _missing_reason(listing["items"], offered)
+                    if reason is not None:
+                        await self._take_off(str(listing["id"]), reason)
+                listings = await self.repo.listings_of(subject)
+        return [listing_view(item, viewer=subject) for item in listings]
+
+    async def _take_off(self, listing_id: str, reason: str) -> None:
+        """卖家交给 knowmart 的资料没了或不再出售：用到它的待审、在架条目自动下架，原因
+        写在条目上给卖家看；买家已有的照旧在。原来不让删在架条目里的资料，那道拦截随
+        v1 的 knowmart 知识库没了（所有者 10-29 定改成自动下架）。"""
+        async with self.repo.transaction():
+            listing = await self.repo.get_listing(listing_id)
+            if listing is None or listing["status"] not in ("pending", "listed"):
+                return
+            await self.repo.update_listing(
+                listing["id"], status="delisted", delist_reason=reason
+            )
 
     async def knowledge_market(
         self, *, q: str | None, category: str | None, page: int
@@ -528,7 +564,7 @@ class MarketService:
         """买知识：记一笔成交，请 knowbase 给买家逐份建使用权（只到成交那一版，不复制；
         SDD 0043 第 4.3 节），资料进买家总栏的「买来的」。
 
-        可恢复（Astra 评审 F07）：先落一笔「办理中」（状态仍叫 copying：要建的几份、
+        可恢复（Astra 评审 F07）：先落一笔「办理中」（状态 granting：要建的几份、
         成交编号定下来），逐份建、逐份记下，都建好才算成交。同一个 request_id 重来接着做
         那一笔；换了键但同样参数、上一笔还没办完的，也接着做那一笔；同一个键参数不同就拒。
         knowbase 按买家、资料与交易编号幂等，重来不会多出使用权。
@@ -536,7 +572,7 @@ class MarketService:
         digest = _buy_digest(listing_id, body)
         trade = await self.repo.trade_by_request(subject, body.request_id)
         if trade is None:
-            trade = await self.repo.copying_trade(subject, digest)
+            trade = await self.repo.granting_trade(subject, digest)
             if trade is not None:
                 # 换了键接手：新键也记在这笔上，以后用新键重试回的还是它（Fable P2-7）
                 async with self.repo.transaction():
@@ -550,7 +586,7 @@ class MarketService:
                 "This request id was used for another purchase", "request_reused"
             )
         if trade["status"] != "done":
-            trade = await self._copy(trade)
+            trade = await self._grant(trade)
         return trade_view(trade, viewer=subject)
 
     async def _start_buying(
@@ -580,9 +616,9 @@ class MarketService:
                     "price": listing["price"],
                     # 资料不再按应用分区（user-data/v2），新成交不记放进哪个应用
                     "target_app": None,
-                    "copied": [],
+                    "granted": [],
                     "demand_id": demand_id,
-                    "status": "copying",
+                    "status": "granting",
                     "resale_allowed": bool(listing["resale_allowed"]),
                     "request_key": body.request_id,
                     "request_digest": digest,
@@ -597,11 +633,11 @@ class MarketService:
                 }
             )
 
-    async def _copy(self, trade: Row) -> Row:
-        """接着建没建完的使用权，逐份记下（字段仍叫 copied）；都建好记成交、关需求。"""
+    async def _grant(self, trade: Row) -> Row:
+        """接着建没建完的使用权，逐份记下；都建好记成交、关需求。"""
         vault = self._need_vault()
         for n, item in enumerate(trade["planned"]):
-            if n < len(trade["copied"]):
+            if n < len(trade["granted"]):
                 continue
             try:
                 got = await vault.purchase(
@@ -615,12 +651,13 @@ class MarketService:
                 # 卖家那份没了、或上架后把许可改低了：这一笔办不下去
                 if exc.code not in ("item_gone", "item_not_for_sale"):
                     raise
+                await self._take_off(trade["listing_ref"], exc.code)
                 return await self._fail(trade["id"], exc.code)
             async with self.repo.transaction():
                 trade = await self._locked_trade(trade["id"])
-                if len(trade["copied"]) == n:  # 并发重来的那一个已经记了就不再记
-                    copied = [
-                        *trade["copied"],
+                if len(trade["granted"]) == n:  # 并发重来的那一个已经记了就不再记
+                    granted = [
+                        *trade["granted"],
                         {
                             "seller_item_id": str(item["seller_item_id"]),
                             # 使用权建在同一份资料上（不复制），编号就是卖家那份
@@ -630,8 +667,8 @@ class MarketService:
                             "sha256": str(item.get("sha256")),
                         },
                     ]
-                    await self.repo.update_trade(trade["id"], copied=copied)
-                    trade = {**trade, "copied": copied}
+                    await self.repo.update_trade(trade["id"], granted=granted)
+                    trade = {**trade, "granted": granted}
         async with self.repo.transaction():
             trade = await self._locked_trade(trade["id"])
             if trade["status"] != "done":
@@ -646,7 +683,7 @@ class MarketService:
         （Fable 评审 P1-2）。已建好的那几份使用权照旧归他。"""
         async with self.repo.transaction():
             trade = await self._locked_trade(trade_id)
-            if trade["status"] == "copying":
+            if trade["status"] == "granting":
                 await self.repo.update_trade(trade_id, status="failed", failure=reason)
                 trade = {**trade, "status": "failed", "failure": reason}
         return trade
@@ -1379,7 +1416,7 @@ class MarketAdmin:
         return [
             trade_view(t, viewer=None)
             for t in await self.repo.trades(
-                copying=True, limit=PAGE_SIZE * 4, offset=(page - 1) * PAGE_SIZE * 4
+                granting=True, limit=PAGE_SIZE * 4, offset=(page - 1) * PAGE_SIZE * 4
             )
         ]
 
@@ -1524,8 +1561,23 @@ def listing_view(item: Row, *, viewer: str | None, admin: bool = False) -> Row:
         "updated_at": _iso(item["updated_at"]),
     }
     if own or admin:
-        view |= {"status": item["status"], "review_note": item["review_note"]}
+        view |= {
+            "status": item["status"],
+            "review_note": item["review_note"],
+            "delist_reason": item.get("delist_reason"),
+        }
     return view
+
+
+def _missing_reason(items: list[Row], offered: dict[str, Row]) -> str | None:
+    """条目里的资料还在不在卖家的 knowmart 栏、还能不能卖；都在都能卖回 None。"""
+    for item in items:
+        got = offered.get(str(item.get("item_id")))
+        if got is None:
+            return "item_gone"
+        if not got.get("sellable"):
+            return "item_not_for_sale"
+    return None
 
 
 def demand_view(d: Row, *, viewer: str, today: date) -> Row:
@@ -1571,9 +1623,9 @@ def trade_view(t: Row, *, viewer: str | None) -> Row:
         "title": t["title"],
         "price": _money(t["price"]),
         "target_app": t["target_app"],
-        "copied": [
+        "granted": [
             {"name": c.get("name"), "item_id": c.get("item_id")}
-            for c in t["copied"] or []
+            for c in t["granted"] or []
         ],
         "demand_id": str(t["demand_id"]) if t["demand_id"] else None,
         "status": t["status"],

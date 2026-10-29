@@ -461,7 +461,7 @@ async def test_knowledge_is_reviewed_listed_bought_and_not_resold(world: World) 
             None,
         )
         # 使用权建在卖家那份资料上，不复制
-        assert [c["item_id"] for c in trade["copied"]] == ["d1"]
+        assert [c["item_id"] for c in trade["granted"]] == ["d1"]
         assert world.vault.purchases[0]["buyer"] == BUYER
         assert world.vault.purchases[0]["material_id"] == "d1"
         assert [t["trade_id"] for t in await svc.my_trades(BUYER, "buyer")] == [
@@ -647,7 +647,7 @@ async def test_buying_resumes_where_it_stopped(world: World) -> None:
     async def halfway(svc: MarketService, admin: MarketAdmin) -> None:
         assert await svc.my_trades(BUYER, "buyer") == []  # 没办完不算成交
         [trade] = await admin.trades(1)
-        assert trade["status"] == "copying" and len(trade["copied"]) == 1
+        assert trade["status"] == "granting" and len(trade["granted"]) == 1
         # 办到一半的也算买了：不许转卖照样挡
         with pytest.raises(BadRequestError) as refused:
             await svc.create_listing(BUYER, knowledge(), token)
@@ -662,7 +662,7 @@ async def test_buying_resumes_where_it_stopped(world: World) -> None:
 
     await world.run(halfway)
     done = await world.run(buy)
-    assert done["status"] == "done" and [c["item_id"] for c in done["copied"]] == [
+    assert done["status"] == "done" and [c["item_id"] for c in done["granted"]] == [
         "d1",
         "d2",
     ]
@@ -725,7 +725,7 @@ async def test_a_lost_or_lowered_material_ends_the_trade(world: World) -> None:
 
     failed = await world.run(buy)
     assert (failed["status"], failed["failure"]) == ("failed", "item_gone")
-    assert [c["item_id"] for c in failed["copied"]] == ["d1"]  # 已建的照旧归他
+    assert [c["item_id"] for c in failed["granted"]] == ["d1"]  # 已建的照旧归他
     again = await world.run(buy)  # 同键重来：还是那一笔，不再接手
     assert again["trade_id"] == failed["trade_id"] and again["status"] == "failed"
 
@@ -734,7 +734,22 @@ async def test_a_lost_or_lowered_material_ends_the_trade(world: World) -> None:
         assert shown["status"] == "failed"
 
     await world.run(mine)
+
+    async def seller_sees(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        [shown] = await svc.my_listings(SELLER)
+        return shown
+
+    # 资料没了：条目自动下架、写明原因（所有者 10-29）
+    off = await world.run(seller_sees)
+    assert (off["status"], off["delist_reason"]) == ("delisted", "item_gone")
     world.vault.gone = set()
+
+    async def relist(svc: MarketService, admin: MarketAdmin) -> None:
+        await svc.submit_listing(SELLER, listing_id)
+        await admin.decide_listing(listing_id, ReviewDecision(approve=True), OPS)
+
+    await world.run(relist)
+    assert (await world.run(seller_sees))["delist_reason"] is None
 
     async def rebuy(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
         return await svc.buy(BUYER, listing_id, BuyIn(request_id="gone-0002"))
@@ -748,6 +763,50 @@ async def test_a_lost_or_lowered_material_ends_the_trade(world: World) -> None:
 
     refused = await world.run(lowered)
     assert (refused["status"], refused["failure"]) == ("failed", "item_not_for_sale")
+    off = await world.run(seller_sees)
+    assert (off["status"], off["delist_reason"]) == ("delisted", "item_not_for_sale")
+
+
+async def test_a_listing_is_taken_off_when_its_material_is_gone(world: World) -> None:
+    """卖家在 knowbase 删了条目里的资料、或改成不出售：还没人来买，卖家打开「我的
+    条目」时就自动下架、写明原因；knowbase 连不上时不核，条目照常列（所有者 10-29）。"""
+    await approved_publisher(world)
+
+    async def listed(svc: MarketService, admin: MarketAdmin) -> str:
+        made = await svc.create_listing(
+            SELLER, knowledge(items=[{"item_id": "d1"}]), token
+        )
+        await svc.submit_listing(SELLER, made["listing_id"])
+        await admin.decide_listing(
+            made["listing_id"], ReviewDecision(approve=True), OPS
+        )
+        return made["listing_id"]
+
+    await world.run(listed)
+
+    async def mine(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        [shown] = await svc.my_listings(SELLER, token)
+        return shown
+
+    assert (await world.run(mine))["status"] == "listed"
+    world.vault.offered["d1"]["sellable"] = False
+    off = await world.run(mine)
+    assert (off["status"], off["delist_reason"]) == ("delisted", "item_not_for_sale")
+
+    async def down(user_token: str) -> list[dict[str, Any]]:
+        raise ServiceUnavailableError("knowbase down", code="knowbase_unavailable")
+
+    world.vault.offered["d1"]["sellable"] = True
+    second = await world.run(listed)
+    world.vault.offered.pop("d1")
+    world.vault.materials = down  # type: ignore[method-assign]
+
+    async def listing_of(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return next(
+            x for x in await svc.my_listings(SELLER, token) if x["listing_id"] == second
+        )
+
+    assert (await world.run(listing_of))["status"] == "listed"  # 连不上：不核
 
 
 async def test_an_approved_publisher_or_license_can_be_revoked(
