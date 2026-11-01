@@ -17,6 +17,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     Numeric,
@@ -28,6 +29,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from sqlalchemy import text
 from app.infrastructure.models.base import Base, TimestampMixin
 
 
@@ -118,6 +120,15 @@ class DemandResponse(Base):
 
 class Trade(Base):
     __tablename__ = "trade"
+    __table_args__ = (
+        Index(
+            "ix_trade_buyer_expert_ref",
+            "buyer_subject",
+            "listing_ref",
+            unique=True,
+            postgresql_where=text("kind = 'expert'"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     kind: Mapped[str] = mapped_column(String(16), nullable=False)

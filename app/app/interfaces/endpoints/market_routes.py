@@ -105,7 +105,7 @@ async def shops(
     svc: Service,
     q: Annotated[str | None, Query(max_length=40)] = None,
     category: Annotated[str | None, Query(max_length=64, pattern=r"^[a-z_.]+$")] = None,
-    sort: Literal["time", "name"] = "time",
+    sort: Literal["time", "name", "category"] = "time",
     page: Page = 1,
 ) -> JSONResponse:
     """首页：小店列表（有在架供给或公开需求的店）；按店名、类目找，按时间或店名排。"""
@@ -514,8 +514,8 @@ async def decide_expert(
 
 @admin_router.post("/takedown", status_code=204)
 async def take_down(admin: Admin, operator: Operator, body: TakeDownIn) -> Response:
-    """平台下架：知识买家那份照旧在；专家下架后不能再请，在跑的跑完。"""
-    await admin.take_down(body.kind, body.target_id, body.note, operator.subject)
+    """平台下架：违规下架收回买家使用权；专家下架后不能再请，在跑的跑完。"""
+    await admin.take_down(body.kind, body.target_id, body.note, operator.subject, violation=body.violation)
     return Response(status_code=204, headers=NO_STORE)
 
 

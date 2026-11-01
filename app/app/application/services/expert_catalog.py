@@ -175,6 +175,8 @@ class ExpertCatalog:
             )
         if not owned and not (self.public_market and publisher is not None):
             raise _not_found()
+        if not owned and not await self.repo.owner_shop_open(bot.owner_subject):
+            raise _not_found()
         bot = _seen_by(bot, owner_subject)
         if version is not None:
             if not VERSION.fullmatch(version):

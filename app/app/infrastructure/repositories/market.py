@@ -692,7 +692,6 @@ class SqlMarketRepository:
         where = [
             Demand.status == "open",
             Demand.deadline >= today,
-            ~shop_suspended(Demand.buyer_subject),
         ]
         if kind:
             where.append(Demand.kind == kind)
@@ -768,7 +767,50 @@ class SqlMarketRepository:
         )
 
     # ---------- 交易与评价 ----------
+    async def trades_for_listing(self, listing_id: str) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(Trade).where(
+                    Trade.listing_ref == listing_id,
+                    Trade.kind == "knowledge",
+                )
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
+    async def has_bought_expert(self, buyer: str, listing_ref: str) -> bool:
+        row = (
+            await self.session.execute(
+                select(Trade.id).where(
+                    Trade.buyer_subject == buyer,
+                    Trade.listing_ref == listing_ref,
+                    Trade.kind == "expert",
+                ).limit(1)
+            )
+        ).scalar_one_or_none()
+        return row is not None
+
     async def add_trade(self, fields: dict[str, Any]) -> dict[str, Any]:
+        if fields.get("kind") == "expert":
+            trade_id = uuid.uuid4()
+            await self.session.execute(
+                pg_insert(Trade)
+                .values(id=trade_id, **fields)
+                .on_conflict_do_nothing(
+                    index_elements=[Trade.buyer_subject, Trade.listing_ref],
+                    index_where=Trade.kind == "expert",
+                )
+            )
+            row = (
+                await self.session.execute(
+                    select(Trade).where(
+                        Trade.buyer_subject == fields["buyer_subject"],
+                        Trade.listing_ref == fields["listing_ref"],
+                        Trade.kind == "expert",
+                    )
+                )
+            ).scalar_one()
+            return _row(row)
         row = Trade(**({"id": uuid.uuid4()} | fields))
         self.session.add(row)
         await self.session.flush()

@@ -56,4 +56,4 @@ def market_service(session: AsyncSession) -> MarketService:
 
 
 def market_admin(session: AsyncSession) -> MarketAdmin:
-    return MarketAdmin(SqlMarketRepository(session), vault=_vault())
+    return MarketAdmin(SqlMarketRepository(session), vault=_vault(), platform_credit_code=get_settings().platform_publisher_credit_code)

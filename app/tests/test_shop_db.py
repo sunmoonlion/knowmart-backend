@@ -375,23 +375,21 @@ async def test_a_suspended_shop_stops_new_public_dealings_and_keeps_old_trades(
         assert (await svc.knowledge_market(q=None, category=None, page=1))[
             "items"
         ] == []
-        assert (await svc.demand_hall(kind=None, q=None, page=1, viewer=BUYER))[
-            "items"
-        ] == []
+        # 停店只挡卖方行为，店主发的需求照常进大厅（Opus 定）
+        assert len((await svc.demand_hall(kind=None, q=None, page=1, viewer=BUYER))["items"]) == 1
         with pytest.raises(NotFoundError):
             await svc.listing(BUYER, listing)
         with pytest.raises(ConcurrencyConflictError) as refused:
             await svc.buy(OTHER, listing, BuyIn(request_id="buy-00000002"))
         assert refused.value.code == "listing_unavailable"
-        for attempt in (
-            svc.create_demand(SELLER, demand()),
-            svc.set_expert_listing(
+        # 停店只挡卖方行为，店主买、请、发需求不挡（Opus 定）
+        dm = await svc.create_demand(SELLER, demand())
+        assert dm["status"] == "open"
+        with pytest.raises(ConcurrencyConflictError) as refused:
+            await svc.set_expert_listing(
                 SELLER, bot, ExpertListingIn(visibility="public", price=None)
-            ),
-        ):
-            with pytest.raises(ConcurrencyConflictError) as refused:
-                await attempt
-            assert refused.value.code == "shop_suspended"
+            )
+        assert refused.value.code == "shop_suspended"
         with pytest.raises(ConcurrencyConflictError) as refused:
             await admin.decide_listing(pending, ReviewDecision(approve=True), OPS)
         assert refused.value.code == "shop_suspended"
@@ -454,9 +452,9 @@ async def test_a_suspended_shop_cannot_answer_or_be_answered(world: ShopWorld) -
         with pytest.raises(ConcurrencyConflictError) as refused:
             await svc.respond(SELLER, theirs["demand_id"], ResponseIn(proposal="x"))
         assert refused.value.code == "shop_suspended"
-        with pytest.raises(ConcurrencyConflictError) as refused:
-            await svc.respond(BUYER, mine["demand_id"], ResponseIn(proposal="x"))
-        assert refused.value.code == "demand_closed"
+        # 店主发的需求（买方行为）照常可被正常店铺响应
+        resp = await svc.respond(BUYER, mine["demand_id"], ResponseIn(proposal="x"))
+        assert resp["status"] == "open"
 
     await world.run(work)
 
@@ -503,3 +501,68 @@ async def test_without_knowbase_the_background_check_is_skipped(db) -> None:  # 
             "delisted": 0,
             "skipped": "knowbase_unconfigured",
         }
+
+
+async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> None:  # noqa: F811
+    # 1. 停店拦截专家详情 detail 与 expert_market
+    await approved_publisher(world)
+    bot = await public_expert(world, db)
+
+    async def check_expert_blocked(svc: MarketService, admin: MarketAdmin) -> None:
+        shop = await svc.ensure_shop(SELLER)
+        await admin.suspend_shop(str(shop["id"]), ShopDecision(note="停店"), OPS)
+        # 本人看得到
+        own_market = await svc.expert_market(str(bot), viewer=SELLER)
+        assert own_market["listing_status"] == "public"
+        # 别人看 expert_market 报 404
+        with pytest.raises(NotFoundError):
+            await svc.expert_market(str(bot), viewer=BUYER)
+
+    await world.run(check_expert_blocked)
+
+    async with db() as session:
+        catalog = ExpertCatalog(SqlKnowbotRepository(session), public_market=True, now=lambda: NOW)
+        # 本人查详情正常
+        own_detail = await catalog.detail(SELLER, str(bot))
+        assert own_detail["knowbot_id"] == str(bot)
+        # 停店期间别人查详情报 404
+        with pytest.raises(NotFoundError):
+            await catalog.detail(BUYER, str(bot))
+
+    # 2. 并发 record_summon 幂等，唯一索引防多记
+    async def check_summon(svc: MarketService, admin: MarketAdmin) -> None:
+        shop = await svc.ensure_shop(SELLER)
+        await admin.restore_shop(str(shop["id"]), ShopDecision(note="恢复"), OPS)
+        t1 = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+        assert t1 is not None
+        # 第二次同一版不重记，回 None
+        t2 = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+        assert t2 is None
+
+    await world.run(check_summon)
+
+    # 3. 店名禁止词 NFKC 规范化匹配（含全角/零宽/空格）
+    from app.domain.market import shop_name_words
+    assert "荐股" in shop_name_words("荐 股 小 店")
+    assert "荐股" in shop_name_words("荐\u200b股")
+    assert "荐股" in shop_name_words("薦股") or "荐股" in shop_name_words("荐　股")
+
+    # 4. 首页支持按类目 category 排序
+    async def check_sort(svc: MarketService, admin: MarketAdmin) -> None:
+        res = await svc.shops(q=None, category=None, sort="category", page=1)
+        assert "items" in res
+
+    await world.run(check_sort)
+
+    # 5. M2 平台因违规下架收回买家使用权并留痕
+    knowledge_listing = await listed_knowledge(world, title="违规资料")
+    async def buy_and_violate(svc: MarketService, admin: MarketAdmin) -> None:
+        trade = await svc.buy(BUYER, knowledge_listing, BuyIn(request_id="buy-m2-001"))
+        assert trade["status"] == "done"
+        # 平台普通下架：买家那份保留（listing_state 为 off）
+        # 平台违规下架：收回买家使用权并留痕
+        await admin.take_down("knowledge", knowledge_listing, "严重虚假宣传", OPS, violation=True)
+        [t] = [x for x in await svc.my_trades(BUYER, "buyer") if x["trade_id"] == trade["trade_id"]]
+        assert t["listing_state"] == "revoked" and t["failure"] == "violation_taken_down"
+
+    await world.run(buy_and_violate)

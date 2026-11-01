@@ -268,6 +268,8 @@ class MarketService:
             chosen.append((shop, act))
         if sort == "name":
             chosen.sort(key=lambda x: (x[0]["name"], str(x[0]["id"])))
+        elif sort == "category":
+            chosen.sort(key=lambda x: (sorted(x[1]["categories"])[0] if x[1]["categories"] else "", str(x[0]["id"])))
         else:
             chosen.sort(key=lambda x: (x[1]["at"], str(x[0]["id"])), reverse=True)
         start = (page - 1) * PAGE_SIZE
@@ -671,9 +673,8 @@ class MarketService:
         if bot is None or bot["owner_subject"] == buyer:
             return None
         ref = f"{bot['id']}@{version}"
-        # 同一个人请同一版只记一次：knowmart 网页「请这位」与运行方钉住
-        # （AI 替他请的也走这里）都会到这里（decisions 10-29「AI 请专家」）
-        if ref in await self.expert_refs_bought(buyer):
+        # 同一个人请同一版只记一次：按部分唯一索引防并发多记
+        if await self.repo.has_bought_expert(buyer, ref):
             return None
         demand_id = await self._demand_offering(buyer, str(bot["id"]))
         async with self.repo.transaction():
@@ -743,13 +744,15 @@ class MarketService:
                 return demand["id"]
         return None
 
-    async def expert_market(self, knowbot_id: str) -> Row:
-        """专家详情页上的市场部分：价格、评价。"""
+    async def expert_market(self, knowbot_id: str, viewer: str | None = None) -> Row:
+        """专家详情页上的市场部分：价格、评价。非本人且停店时回 404。"""
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None:
             raise _missing("knowbot")
-        reviews = await self.repo.reviews_for(str(bot["id"]))
         shop = await self.repo.shop_of(bot["owner_subject"])
+        if viewer is not None and bot["owner_subject"] != viewer and shop_closed(shop):
+            raise _missing("knowbot")
+        reviews = await self.repo.reviews_for(str(bot["id"]))
         return {
             "price": _money(bot["price"]),
             "listing_status": bot["listing_status"],
@@ -1101,7 +1104,6 @@ class MarketService:
     async def create_demand(self, subject: str, body: DemandIn) -> Row:
         if body.deadline < self.now().date():
             raise BadRequestError("The deadline has passed", code="deadline_passed")
-        await self._open_shop(subject)
         async with self.repo.transaction():
             found = await self.repo.add_demand(
                 {
@@ -1187,9 +1189,7 @@ class MarketService:
             raise _missing("demand")
         if found["buyer_subject"] == subject:
             raise BadRequestError("This is your own demand", code="own_demand")
-        if not demand_open(found["status"], found["deadline"], today) or shop_closed(
-            await self.repo.shop_of(found["buyer_subject"])
-        ):
+        if not demand_open(found["status"], found["deadline"], today):
             raise _conflict("This demand no longer takes responses", "demand_closed")
         await self._open_shop(subject)
         if body.listing_kind is not None:
@@ -1371,7 +1371,9 @@ class MarketService:
         return out
 
     async def _listing_state(self, trade: Row) -> str:
-        """成交的那一条现在：on（知识在架、专家这一版别人请得到）/ off。"""
+        """成交的那一条现在：on（知识在架、专家这一版别人请得到）/ off / revoked。"""
+        if trade.get("failure") == "violation_taken_down":
+            return "revoked"
         today = self.now().date()
         if trade["kind"] == "knowledge":
             listing = await self.repo.get_listing(str(trade["listing_ref"]))
@@ -1515,10 +1517,12 @@ class MarketAdmin:
         *,
         vault: KnowledgeVault | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        platform_credit_code: str = "",
     ) -> None:
         self.repo = repo
         self.vault = vault
         self.now = now
+        self.platform_credit_code = platform_credit_code
 
     # ------ 小店的处置（SDD 0018 第十一节第 7 之二小节；数据拓扑第十一节） ------
     async def shops(self, *, q: str | None, status: str | None, page: int) -> list[Row]:
@@ -1539,7 +1543,7 @@ class MarketAdmin:
                     if publisher
                     else None,
                     "history": [
-                        shop_event_view(e)
+                        shop_event_view(e, for_admin=True)
                         for e in await self.repo.shop_events(shop["id"], limit=20)
                     ],
                 }
@@ -1604,13 +1608,18 @@ class MarketAdmin:
             )
         )
         states: dict[tuple[str, str], str] = {}
-        for start in range(0, len(pairs), OFFER_BATCH):
+        valid_pairs = [
+            (s, m) for s, m in pairs
+            if s and m and len(s) <= 255 and len(m) <= 64
+        ]
+        for start in range(0, len(valid_pairs), OFFER_BATCH):
+            batch = valid_pairs[start : start + OFFER_BATCH]
             try:
-                states |= await self.vault.offer_states(
-                    pairs[start : start + OFFER_BATCH]
-                )
+                states |= await self.vault.offer_states(batch)
             except AppException as exc:
-                return {"checked": 0, "delisted": 0, "skipped": exc.code}
+                if exc.code == "knowbase_unavailable":
+                    return {"checked": 0, "delisted": 0, "skipped": exc.code}
+                continue
         delisted = 0
         for listing in listings:
             reason = _offer_reason(listing, states)
@@ -1624,9 +1633,14 @@ class MarketAdmin:
         today = self.now().date()
         publishers = []
         for p in await self.repo.pending_publishers():
+            matches_platform = bool(
+                self.platform_credit_code
+                and str(p.get("credit_code") or "").strip().upper() == self.platform_credit_code.strip().upper()
+            )
             publishers.append(
                 {
                     **publisher_view(p, own=True),
+                    "matches_platform_credit_code": matches_platform,
                     "documents": [
                         document_view(d)
                         for d in await self.repo.documents_of(str(p["id"]))
@@ -1841,7 +1855,7 @@ class MarketAdmin:
             await self.repo.update_knowbot(found["id"], **changes)
 
     async def take_down(
-        self, kind: str, target_id: str, note: str, reviewer: str
+        self, kind: str, target_id: str, note: str, reviewer: str, *, violation: bool = False
     ) -> None:
         """平台下架：知识买家那份照旧在；专家下架后不能再请（在跑的跑完）。"""
         now = self.now()
@@ -1850,13 +1864,19 @@ class MarketAdmin:
                 found = await self.repo.get_listing(target_id)
                 if found is None:
                     raise _missing()
+                review_note = f"违规下架：{note}" if violation else note
                 await self.repo.update_listing(
                     found["id"],
                     status="taken_down",
-                    review_note=note,
+                    review_note=review_note,
                     reviewed_by=reviewer,
                     reviewed_at=now,
                 )
+                if violation:
+                    # 违规下架收回买家使用权留痕
+                    trades = await self.repo.trades_for_listing(str(found["id"]))
+                    for t in trades:
+                        await self.repo.update_trade(t["id"], failure="violation_taken_down")
             elif kind == "expert":
                 bot = await self.repo.get_knowbot(target_id.partition("@")[0])
                 if bot is None:
@@ -2088,15 +2108,18 @@ def shop_ref(shop: Row) -> Row:
     return {"shop_id": str(shop["id"]), "name": shop["name"]}
 
 
-def shop_event_view(e: Row) -> Row:
-    """留痕给本人与运营看；停店、恢复是谁做的不给本人（只给说明）。"""
-    return {
+def shop_event_view(e: Row, *, for_admin: bool = False) -> Row:
+    """留痕给本人与运营看；停店、恢复是谁做的不给本人（只给说明）。运营看得到 by_subject。"""
+    out = {
         "kind": e["kind"],
         "old_name": e["old_name"],
         "new_name": e["new_name"],
         "note": e["note"],
         "at": _iso(e["created_at"]),
     }
+    if for_admin and "by_subject" in e and e["by_subject"]:
+        out["by_subject"] = e["by_subject"]
+    return out
 
 
 def _activity(supply: list[Row]) -> dict[str, Row]:

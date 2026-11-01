@@ -62,7 +62,7 @@ FROM (
 ) AS s
 LEFT JOIN (
     SELECT subject,
-           min(NULLIF(btrim(left(coalesce(display_name, username, ''), 40)), ''))
+           min(NULLIF(btrim(left(coalesce(NULLIF(display_name, ''), username, ''), 40)), ''))
                AS name
     FROM auth_user GROUP BY subject
 ) AS n ON n.subject = s.subject
@@ -151,6 +151,11 @@ def upgrade() -> None:
         "trade", sa.Column("seller_publisher", postgresql.JSONB(), nullable=True)
     )
     op.get_bind().execute(sa.text(BACKFILL), {"words": "|".join(WORDS)})
+    op.get_bind().execute(sa.text("""
+        INSERT INTO publisher_change (id, publisher_id, kind, name, created_at)
+        SELECT gen_random_uuid(), id, kind, name, now() FROM publisher
+        ON CONFLICT DO NOTHING
+    """))
 
 
 def downgrade() -> None:

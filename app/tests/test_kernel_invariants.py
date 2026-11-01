@@ -56,6 +56,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20261029_0011_trade_granted_delist_reason.py",
         "20261029_0012_shop.py",
         "20261030_0013_version_held.py",
+        "20261101_0014_trade_expert_unique_index.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert sum("down_revision = None" in content for content in contents) == 1
