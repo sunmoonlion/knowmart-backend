@@ -19,9 +19,11 @@ from core.config import get_settings
 
 
 def knowbot_service(session: AsyncSession) -> KnowbotService:
+    """收清单时硬查、后台定时核所绑数据都经 knowbase（0043 第 4.3 节）。"""
     return KnowbotService(
         SqlKnowbotRepository(session),
         public_market=get_settings().public_market_enabled,
+        bindings=_vault(),
     )
 
 

@@ -33,7 +33,7 @@ from app.domain.market import (
 )
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
 from app.infrastructure.repositories.market import SqlMarketRepository
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import AllShareable, manifest
 from tests.test_knowbot_repository_db import db, deliver  # noqa: F401
 from tests.test_market_db import (
     BUYER,
@@ -407,7 +407,9 @@ async def test_a_suspended_shop_stops_new_public_dealings_and_keeps_old_trades(
 
     await world.run(blocked)
     async with db() as session:
-        knowbots = KnowbotService(SqlKnowbotRepository(session), public_market=True)
+        knowbots = KnowbotService(
+            SqlKnowbotRepository(session), public_market=True, bindings=AllShareable()
+        )
         with pytest.raises(NotFoundError):  # 停店期间别人请不了
             await knowbots.summon(
                 owner_subject=BUYER, knowbot_id=bot, version="1", runtime="knowbench"
@@ -434,7 +436,9 @@ async def test_a_suspended_shop_stops_new_public_dealings_and_keeps_old_trades(
 
     await world.run(restored)
     async with db() as session:
-        knowbots = KnowbotService(SqlKnowbotRepository(session), public_market=True)
+        knowbots = KnowbotService(
+            SqlKnowbotRepository(session), public_market=True, bindings=AllShareable()
+        )
         found = await knowbots.summon(
             owner_subject=BUYER, knowbot_id=bot, version="1", runtime="knowbench"
         )

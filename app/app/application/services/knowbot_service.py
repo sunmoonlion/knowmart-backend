@@ -5,7 +5,11 @@
   不是你的和不存在一样，都是找不到；
 - 版本只插不改：同一分身同一版本号只认一份内容；
 - 交付幂等：同一个交付单号重发，内容一样就返回原结果，不一样就冲突；
-- 停用只挡新的「请」，已经请去在跑的不受影响（工作台按摘要钉死并缓存了清单）。
+- 停用只挡新的「请」，已经请去在跑的不受影响（工作台按摘要钉死并缓存了清单）；
+- 收清单时硬查所绑数据的许可（0043 第 4.3 节）：自用要每份还在，公开要每份都能经专家
+  给别人用；knowbase 说不准（没配、连不上）就不收；
+- 在售那一版所绑数据失效转「待处理」（数据拓扑第十节第 5 条）：后台每 10 分钟核一次，
+  别人请不了、主人照样能请，数据好了自动回在售。
 """
 
 from __future__ import annotations
@@ -17,16 +21,24 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from app.application.errors.exceptions import (
+    AppException,
     BadRequestError,
     ConcurrencyConflictError,
     NotFoundError,
+    ServiceUnavailableError,
 )
 from app.application.ports.knowbots import (
+    BindingChecker,
     KnowbotRecord,
     KnowbotRepository,
     KnowbotVersionRecord,
 )
-from app.domain.knowbots.manifest import parse_manifest
+from app.domain.knowbots.delivery import (
+    CATEGORY_CODES,
+    binding_items,
+    binding_problem,
+)
+from app.domain.knowbots.manifest import KnowbotManifestV2, parse_manifest
 
 DELIVERY_ID = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 SOURCE_REF = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -34,6 +46,7 @@ OWNER = re.compile(r"^[A-Za-z0-9._:@-]{1,512}$")
 VERSION = re.compile(r"^[1-9][0-9]{0,5}$")
 KNOWLAB_REF = "knowlab-"  # knowlab 交付时的分身引用都这样开头
 OUTCOMES = frozenset({"declined", "rejected"})
+CHECK_BATCH = 200  # 一次问 knowbase 最多几份（同 knowbase 的上限）
 
 
 @dataclass(frozen=True)
@@ -68,13 +81,42 @@ class KnowbotService:
         repo: KnowbotRepository,
         *,
         public_market: bool = False,
+        bindings: BindingChecker | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self.repo = repo
         # 平台开了公开（PUBLIC_MARKET_ENABLED）：公开、资质有效的专家别人也能请
         # （SDD 0018 第十一节）
         self.public_market = public_market
+        # knowbase 核所绑数据（0043 第 4.3 节）；没配时带绑定的清单一律不收
+        self.bindings = bindings
         self.now = now
+
+    async def _check_bindings(
+        self, owner_subject: str, parsed: KnowbotManifestV2, *, public: bool
+    ) -> None:
+        """收清单时硬查（0043 第 4.3 节「两种许可检查」）：不行回 409 带原因。"""
+        if not parsed.bindings:
+            return
+        if self.bindings is None:
+            raise ServiceUnavailableError(
+                "knowbase is not configured to check the bindings",
+                code="knowbase_unconfigured",
+            )
+        items = binding_items(
+            owner_subject, [b.model_dump(mode="json") for b in parsed.bindings]
+        )
+        states = await self.bindings.binding_states(items)
+        if len(states) != len(items):
+            raise ServiceUnavailableError(
+                "knowbase answered the binding check partly",
+                code="knowbase_unavailable",
+            )
+        problem = binding_problem(states, public=public)
+        if problem is not None:
+            raise ConcurrencyConflictError(
+                "The bound data cannot go with this expert", code=problem
+            )
 
     async def deliver(
         self,
@@ -84,15 +126,20 @@ class KnowbotService:
         knowbot_ref: str,
         manifest: object,
         request_public: bool = False,
+        category: str | None = None,
     ) -> DeliveryResult:
         """knowlab 交一版。
 
         request_public：那边运营把这一版审成「公开」，只有这样的版本才给别人看、给别人
-        请；审成自用的只给主人（Fable 评审 P2-2）。
+        请；审成自用的只给主人（Fable 评审 P2-2）。先交成自用、后转公开的同一版再交一次
+        带 true：内容一样就重查许可后放开（0043 第 4.3 节「自用转公开时重查」）。
+        category：平台人员选的类目（0032 待定第一项），给了就记在专家上。
         """
         _require(DELIVERY_ID, delivery_id, "delivery_id")
         _require(OWNER, owner_subject, "owner_subject")
         _require(SOURCE_REF, knowbot_ref, "knowbot_ref")
+        if category is not None and category not in CATEGORY_CODES:
+            raise BadRequestError("category is invalid", code="category_invalid")
         try:
             parsed = parse_manifest(manifest)
         except ValueError as exc:
@@ -100,14 +147,25 @@ class KnowbotService:
                 "The knowbot manifest is invalid", code="manifest_invalid"
             ) from exc
         digest = parsed.digest()
+        prior = await self.repo.find_delivery(delivery_id)
+        if prior is None:
+            await self._check_bindings(owner_subject, parsed, public=request_public)
         async with self.repo.transaction():
             prior = await self.repo.find_delivery(delivery_id)
             if prior is not None:
+                bot_then = await self.repo.get_knowbot(prior.version.knowbot_id)
+                # 重放要整件一样：公开与否、类目也比（knowlab 撤回后再交、单号撞上时
+                # 别把自用错成公开）
                 same = (
                     prior.owner_subject == owner_subject
                     and prior.source_ref == knowbot_ref
                     and prior.version.version == parsed.version
                     and prior.version.digest == digest
+                    and prior.version.public_allowed == request_public
+                    and (
+                        category is None
+                        or (bot_then is not None and bot_then.category == category)
+                    )
                 )
                 if not same:
                     raise ConcurrencyConflictError(
@@ -131,7 +189,36 @@ class KnowbotService:
                     "This knowbot belongs to another owner",
                     code="knowbot_owner_mismatch",
                 )
-            if await self.repo.get_version(bot.id, parsed.version) is not None:
+            if category is not None:
+                await self.repo.set_category(bot.id, category)
+            existing = await self.repo.get_version(bot.id, parsed.version)
+            if existing is not None:
+                if (
+                    request_public
+                    and existing.digest == digest
+                    and existing.public_allowed
+                ):
+                    # 自用转公开已经成了（knowlab 超时重试）：当重放，回 200
+                    return DeliveryResult(
+                        knowbot_id=bot.id,
+                        version=parsed.version,
+                        digest=digest,
+                        replayed=True,
+                    )
+                if (
+                    request_public
+                    and existing.digest == digest
+                    and not existing.public_allowed
+                    and existing.status != "stopped"
+                ):
+                    # 自用转公开：同一版、同一份内容，许可上面已重查过
+                    await self.repo.allow_public(bot.id, parsed.version)
+                    return DeliveryResult(
+                        knowbot_id=bot.id,
+                        version=parsed.version,
+                        digest=digest,
+                        replayed=False,
+                    )
                 raise ConcurrencyConflictError(
                     "This knowbot version was already delivered; versions never change",
                     code="knowbot_version_exists",
@@ -185,7 +272,11 @@ class KnowbotService:
         if not VERSION.fullmatch(version or ""):
             raise _not_found()
         found = await self.repo.get_version(bot.id, version)
-        if found is None or found.status != "active":
+        mine = bot.owner_subject == owner_subject
+        # 待处理的（所绑数据失效）别人请不了，主人照样能请
+        if found is None or found.status not in (
+            ("active", "held") if mine else ("active",)
+        ):
             raise _not_found()
         if bot.owner_subject != owner_subject and not found.public_allowed:
             raise _not_found()  # 审成自用的那一版只给主人（Fable 评审 P2-2）
@@ -252,6 +343,26 @@ class KnowbotService:
                 raise _not_found()
             await self.repo.set_version_status(bot.id, version, "stopped")
 
+    async def withdraw_public(
+        self,
+        *,
+        owner_subject: str,
+        knowbot_id: str,
+        version: str,
+    ) -> None:
+        """knowlab 收回某一版的公开（转公开撤回撞上已收下）：只撤掉这一版的公开许可，
+        保留作者的自用上架（已停用的不复活；因公开许可不足待处理的回在售）。只认这个
+        所有者的、knowlab 交来的；撤过的再撤照样 204。"""
+        async with self.repo.transaction():
+            bot = await self._owned(owner_subject, knowbot_id)
+            if not bot.source_ref.startswith(KNOWLAB_REF):
+                raise _not_found()
+            if not VERSION.fullmatch(version or ""):
+                raise _not_found()
+            if await self.repo.get_version(bot.id, version) is None:
+                raise _not_found()
+            await self.repo.withdraw_public(bot.id, version)
+
     async def set_unlisted(
         self, *, owner_subject: str, knowbot_ref: str, version: str, outcome: str
     ) -> None:
@@ -284,3 +395,71 @@ class KnowbotService:
                 version=version,
                 outcome=outcome,
             )
+
+    async def check_bindings(self) -> dict[str, object]:
+        """后台每 10 分钟：在售（审成公开、没停用）那几版所绑的数据还能不能经
+        专家给别人用（数据拓扑第十节第 5 条）。不行的转待处理、记原因；待处理的
+        好了回在售。knowbase 没配、连不上就这一轮不核，没回的那几份不据此改。"""
+        if self.bindings is None:
+            return {"checked": 0, "held": 0, "released": 0, "skipped": "unconfigured"}
+        watched = await self.repo.watched_versions()
+        wanted: dict[tuple[str, str, int, str | None], None] = {}
+        per_version: list[
+            tuple[KnowbotVersionRecord, list[tuple[str, str, int, str | None]]]
+        ] = []
+        for owner, version in watched:
+            items = binding_items(owner, version.manifest.get("bindings") or [])
+            per_version.append((version, items))
+            wanted.update(dict.fromkeys(items))
+        asked = list(wanted)
+        states: dict[tuple[str, str, int, str | None], dict[str, object]] = {}
+        for start in range(0, len(asked), CHECK_BATCH):
+            batch = asked[start : start + CHECK_BATCH]
+            try:
+                answer = await self.bindings.binding_states(batch)
+            except AppException as exc:
+                return {"checked": 0, "held": 0, "released": 0, "skipped": exc.code}
+            if len(answer) != len(batch):
+                return {"checked": 0, "held": 0, "released": 0, "skipped": "partial"}
+            states.update(zip(batch, answer, strict=True))
+        held = released = 0
+        at = self.now()
+        for version, items in per_version:
+            problem = binding_problem([states[i] for i in items], public=True)
+            async with self.repo.transaction():
+                changed = await self.repo.hold_version(
+                    version.knowbot_id, version.version, problem, at
+                )
+            if changed and problem is not None:
+                held += 1
+            elif changed:
+                released += 1
+        return {
+            "checked": len(per_version),
+            "held": held,
+            "released": released,
+            "skipped": None,
+        }
+
+    async def source_versions(
+        self, owner_subject: str, knowbot_ref: str
+    ) -> list[dict[str, object]]:
+        """knowlab 取回它交来的各版现在怎样（在售、待处理与原因、停用、给不给别人请），
+        在 knowlab 的专家栏照实写（0043 第 4.3 节）。只认这个所有者、knowlab 交来的；
+        还没交成的回空。"""
+        _require(OWNER, owner_subject, "owner_subject")
+        _require(SOURCE_REF, knowbot_ref, "knowbot_ref")
+        if not knowbot_ref.startswith(KNOWLAB_REF):
+            raise _not_found()
+        bot = await self.repo.find_by_source(knowbot_ref)
+        if bot is None or bot.owner_subject != owner_subject:
+            return []
+        return [
+            {
+                "version": v.version,
+                "status": v.status,
+                "held_reason": v.held_reason,
+                "public_allowed": v.public_allowed,
+            }
+            for v in bot.versions
+        ]

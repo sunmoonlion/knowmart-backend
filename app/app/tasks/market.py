@@ -3,6 +3,8 @@
 - sweep（每小时）：资质到期前提醒、过期的改回自用或下架、审过一年的证件照片清掉内容。
 - check_offers（每 10 分钟）：待审、在架的知识条目，用到的资料在 knowbase 没了或不再
   出售的自动下架（不等卖家打开「我发布的」）。knowbase 连不上就这一轮不核。
+- check_bindings（每 10 分钟）：在售专家那几版所绑的数据还能不能经专家给别人用，不行的
+  转待处理、好了回在售（0043 第 4.3 节；数据拓扑第十节第 5 条）。
 重复跑不会多做。
 """
 
@@ -11,7 +13,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from app.bootstrap.knowbots import market_admin
+from app.bootstrap.knowbots import knowbot_service, market_admin
 from app.infrastructure.storage.postgres import get_postgres
 from app.worker import celery_app
 
@@ -34,3 +36,18 @@ def sweep() -> dict[str, Any]:
 @celery_app.task(name="app.tasks.market.check_offers")
 def check_offers() -> dict[str, Any]:
     return asyncio.run(_with_admin("check_offers"))
+
+
+async def _check_bindings() -> dict[str, Any]:
+    postgres = get_postgres()
+    await postgres.init()
+    try:
+        async with postgres.session_factory() as session:
+            return await knowbot_service(session).check_bindings()
+    finally:
+        await postgres.shutdown()
+
+
+@celery_app.task(name="app.tasks.market.check_bindings")
+def check_bindings() -> dict[str, Any]:
+    return asyncio.run(_check_bindings())

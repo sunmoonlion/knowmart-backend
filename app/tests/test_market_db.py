@@ -268,6 +268,7 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
 
     async def go_public(svc: MarketService, admin: MarketAdmin):
         assert [e["knowbot_id"] for e in await svc.my_experts(SELLER)] == [str(bot)]
+        assert (await svc.my_experts(SELLER))[0]["held"] == []
         listing = await svc.set_expert_listing(
             SELLER,
             str(bot),
@@ -336,6 +337,22 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
         await admin.take_down("expert", f"{bot}@1", "被举报核实", OPS)
 
     await world.run(trade)
+
+    async def on_hold(svc: MarketService, admin: MarketAdmin):
+        # 所绑数据失效转待处理：作者在「我的专家」看得到原因，别人找不到这一版
+        async with db() as session:
+            repo = SqlKnowbotRepository(session)
+            async with repo.transaction():
+                await repo.hold_version(bot, "1", "binding_deleted", NOW)
+            catalog = ExpertCatalog(repo, public_market=True, now=lambda: NOW)
+            assert await catalog.runtime_catalog(BUYER, "knowbench") == []
+            assert len(await catalog.runtime_catalog(SELLER, "knowbench")) == 1
+        [mine] = await svc.my_experts(SELLER)
+        assert [(h["version"], h["reason"]) for h in mine["held"]] == [
+            ("1", "binding_deleted")
+        ]
+
+    await world.run(on_hold)
     async with db() as session:
         knowbots = KnowbotService(SqlKnowbotRepository(session), public_market=True)
         with pytest.raises(NotFoundError):

@@ -6,6 +6,7 @@ import asyncio
 import importlib.util
 import os
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,7 @@ from app.application.errors.exceptions import ConcurrencyConflictError, NotFound
 from app.application.services.knowbot_service import KnowbotService
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
 from app.infrastructure.storage.postgres import make_session_factory
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import AllShareable, manifest
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = "8b1f5c1e-0000-4000-8000-000000000001"
@@ -67,7 +68,9 @@ async def deliver(
 ):
     """public：knowlab 运营把这一版审成了公开（Fable 评审 P2-2）。"""
     async with db() as session:
-        return await KnowbotService(SqlKnowbotRepository(session)).deliver(
+        return await KnowbotService(
+            SqlKnowbotRepository(session), bindings=AllShareable()
+        ).deliver(
             delivery_id=delivery,
             owner_subject=OWNER,
             knowbot_ref=ref,
@@ -85,7 +88,7 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
     with pytest.raises(ConcurrencyConflictError):
         await deliver(db, "delivery-0003", manifest("2", tagline="改"))
     async with db() as session:
-        svc = KnowbotService(SqlKnowbotRepository(session))
+        svc = KnowbotService(SqlKnowbotRepository(session), bindings=AllShareable())
         found = await svc.summon(
             owner_subject=OWNER,
             knowbot_id=str(first.knowbot_id),
@@ -99,7 +102,7 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
         assert [v.version for v in bot.versions] == ["1", "2"]
         await svc.stop(owner_subject=OWNER, knowbot_id=str(bot.id), version="1")
     async with db() as session:
-        svc = KnowbotService(SqlKnowbotRepository(session))
+        svc = KnowbotService(SqlKnowbotRepository(session), bindings=AllShareable())
         with pytest.raises(NotFoundError):
             await svc.summon(
                 owner_subject=OWNER,
@@ -149,7 +152,9 @@ async def test_catalog_visibility_in_sql(db) -> None:
     mine = await deliver(db, "delivery-0101", manifest(), ref="lab-mine")
     other = "9c2f0000-0000-4000-8000-000000000002"
     async with db() as session:
-        theirs = await KnowbotService(SqlKnowbotRepository(session)).deliver(
+        theirs = await KnowbotService(
+            SqlKnowbotRepository(session), bindings=AllShareable()
+        ).deliver(
             delivery_id="delivery-0102",
             owner_subject=other,
             knowbot_ref="lab-theirs",
@@ -282,7 +287,7 @@ async def test_unlisted_outcomes_on_the_real_database(db) -> None:
     """SDD 0037 第三节：没上架那几版的结局按版本逐条写（重发照新的写）、只认主人，
     结局只有两种（库挡）。"""
     async with db() as session:
-        svc = KnowbotService(SqlKnowbotRepository(session))
+        svc = KnowbotService(SqlKnowbotRepository(session), bindings=AllShareable())
         for version, outcome in (
             ("1", "declined"),
             ("1", "rejected"),
@@ -328,3 +333,48 @@ async def test_versions_before_0008_stay_public_as_before(db) -> None:
             {"i": first.knowbot_id},
         )
         assert [tuple(r) for r in rows] == [("1", True), ("2", False)]
+
+
+@pytest.mark.asyncio
+async def test_sold_versions_on_hold_round_trip_in_postgres(db) -> None:
+    """在售那一版转待处理、好了回在售；自用的、停用的不核（0043 第 4.3 节）。"""
+    sold = await deliver(db, "delivery-0001", manifest(), public=True)
+    await deliver(db, "delivery-0002", manifest("2"))
+    async with db() as session:
+        repo = SqlKnowbotRepository(session)
+        watched = await repo.watched_versions()
+        assert [(o, v.version) for o, v in watched] == [(OWNER, "1")]
+        at = datetime.now(UTC)
+        async with repo.transaction():
+            assert await repo.hold_version(sold.knowbot_id, "1", "binding_deleted", at)
+            assert not await repo.hold_version(
+                sold.knowbot_id, "1", "binding_deleted", at
+            )
+        held = await repo.get_version(sold.knowbot_id, "1")
+        assert held is not None
+        assert (held.status, held.held_reason) == ("held", "binding_deleted")
+        async with repo.transaction():
+            assert await repo.hold_version(sold.knowbot_id, "1", None, at)
+            assert await repo.hold_version(sold.knowbot_id, "1", "binding_gone", at)
+            await repo.set_version_status(sold.knowbot_id, "1", "stopped")
+            assert not await repo.hold_version(sold.knowbot_id, "1", "binding_gone", at)
+        assert await repo.watched_versions() == []
+
+
+@pytest.mark.asyncio
+async def test_withdraw_public_reverts_listing_when_no_public_version_remains(
+    db,
+) -> None:
+    """真库验证 withdraw_public：撤掉唯一公开版后公开监视列表不再含该版。"""
+    sold = await deliver(db, "delivery-0001", manifest(), public=True, ref="knowlab-r1")
+    async with db() as session:
+        repo = SqlKnowbotRepository(session)
+        svc = KnowbotService(repo, bindings=AllShareable())
+        await svc.withdraw_public(
+            owner_subject=OWNER, knowbot_id=str(sold.knowbot_id), version="1"
+        )
+    async with db() as session:
+        repo = SqlKnowbotRepository(session)
+        v = await repo.get_version(sold.knowbot_id, "1")
+        assert v is not None and not v.public_allowed and v.status == "active"
+        assert await repo.watched_versions() == []

@@ -6,9 +6,10 @@ from app.application.errors.exceptions import (
     BadRequestError,
     ConcurrencyConflictError,
     NotFoundError,
+    ServiceUnavailableError,
 )
 from app.application.services.knowbot_service import KnowbotService
-from tests.knowbot_fakes import MemoryKnowbots, manifest
+from tests.knowbot_fakes import AllShareable, MemoryKnowbots, manifest
 
 OWNER = "8b1f5c1e-0000-4000-8000-000000000001"
 OTHER = "8b1f5c1e-0000-4000-8000-000000000002"
@@ -16,7 +17,7 @@ OTHER = "8b1f5c1e-0000-4000-8000-000000000002"
 
 def service() -> tuple[KnowbotService, MemoryKnowbots]:
     repo = MemoryKnowbots()
-    return KnowbotService(repo), repo
+    return KnowbotService(repo, bindings=AllShareable()), repo
 
 
 async def deliver(svc: KnowbotService, delivery: str, doc: dict, owner: str = OWNER):
@@ -227,3 +228,161 @@ async def test_summon_only_serves_the_callers_own_runtime() -> None:
             version="1",
             runtime="another-runtime",
         )
+
+
+# —— 收清单时硬查所绑数据、自用转公开、类目、在售转待处理（0043 第 4.3 节）——
+BOUND = (OWNER, "m-1", 2)
+
+
+async def _deliver(svc: KnowbotService, delivery: str, doc: dict, **kw):
+    return await svc.deliver(
+        delivery_id=delivery,
+        owner_subject=OWNER,
+        knowbot_ref="lab-bot-1",
+        manifest=doc,
+        **kw,
+    )
+
+
+@pytest.mark.asyncio
+async def test_bindings_are_checked_hard_when_the_manifest_arrives() -> None:
+    checker = AllShareable()
+    repo = MemoryKnowbots()
+    svc = KnowbotService(repo, bindings=checker)
+    # 只许本人用的：交到自用可以，公开不行
+    checker.states[BOUND] = {"state": "live", "license": "self", "shareable": False}
+    with pytest.raises(ConcurrencyConflictError) as error:
+        await _deliver(svc, "delivery-0001", manifest(), request_public=True)
+    assert error.value.code == "binding_not_shareable"
+    assert repo.bots == {}
+    await _deliver(svc, "delivery-0001", manifest())
+    # 删了的连自用也不收
+    checker.states[BOUND] = {"state": "deleted", "license": "self", "shareable": False}
+    with pytest.raises(ConcurrencyConflictError) as error:
+        await _deliver(svc, "delivery-0002", manifest("2"))
+    assert error.value.code == "binding_deleted"
+    # knowbase 连不上、没配：带绑定的不收；不带绑定的照收
+    checker.down = True
+    with pytest.raises(ServiceUnavailableError):
+        await _deliver(svc, "delivery-0002", manifest("2"))
+    unconfigured = KnowbotService(MemoryKnowbots())
+    with pytest.raises(ServiceUnavailableError) as error:
+        await _deliver(unconfigured, "delivery-0003", manifest())
+    assert error.value.code == "knowbase_unconfigured"
+    await _deliver(unconfigured, "delivery-0003", manifest(bindings=[]))
+
+
+@pytest.mark.asyncio
+async def test_self_use_turns_public_after_a_recheck_and_category_is_kept() -> None:
+    checker = AllShareable()
+    repo = MemoryKnowbots()
+    svc = KnowbotService(repo, bindings=checker)
+    first = await _deliver(svc, "knowlab-expert-1", manifest())
+    with pytest.raises(BadRequestError) as error:
+        await _deliver(svc, "knowlab-expert-x", manifest(), category="nope")
+    assert error.value.code == "category_invalid"
+    checker.states[BOUND] = {"state": "live", "license": "self", "shareable": False}
+    with pytest.raises(ConcurrencyConflictError) as error:
+        await _deliver(svc, "knowlab-delivery-2", manifest(), request_public=True)
+    assert error.value.code == "binding_not_shareable"
+    checker.states.clear()
+    turned = await _deliver(
+        svc,
+        "knowlab-delivery-2",
+        manifest(),
+        request_public=True,
+        category="tools.lookup",
+    )
+    assert turned.knowbot_id == first.knowbot_id and not turned.replayed
+    [bot] = await repo.list_for_owner(OWNER)
+    assert bot.versions[0].public_allowed and bot.category == "tools.lookup"
+    # knowlab 超时重试同一次转公开：当重放，不撞「版本已交过」
+    again = await _deliver(svc, "knowlab-delivery-2", manifest(), request_public=True)
+    assert again.replayed and again.knowbot_id == first.knowbot_id
+    retried = await _deliver(svc, "knowlab-delivery-9", manifest(), request_public=True)
+    assert retried.replayed
+    # 硬查带着冻结依据问 knowbase（签授权看的是冻结时的许可）
+    assert checker.asked[-1] == (OWNER, "m-1", 2, "expert:fa-1@2")
+    # 内容变了的照旧不许改
+    with pytest.raises(ConcurrencyConflictError) as error:
+        await _deliver(
+            svc, "knowlab-delivery-3", manifest(tagline="变了"), request_public=True
+        )
+    assert error.value.code == "knowbot_version_exists"
+
+
+@pytest.mark.asyncio
+async def test_sold_versions_go_on_hold_when_their_data_fails_and_come_back() -> None:
+    checker = AllShareable()
+    repo = MemoryKnowbots()
+    svc = KnowbotService(repo, bindings=checker, public_market=True)
+    result = await _deliver(svc, "delivery-0001", manifest(), request_public=True)
+    await _deliver(svc, "delivery-0002", manifest("2"))  # 自用的不核
+    bot_id = str(result.knowbot_id)
+    assert (await svc.check_bindings())["held"] == 0
+    checker.states[BOUND] = {"state": "live", "license": "self", "shareable": False}
+    done = await svc.check_bindings()
+    assert (done["checked"], done["held"]) == (1, 1)
+    held = repo.versions[(result.knowbot_id, "1")]
+    assert (held.status, held.held_reason) == ("held", "binding_not_shareable")
+    assert (await svc.check_bindings())["held"] == 0  # 重复跑不多做
+    # 主人照样能请；别人请不了（就算公开）
+    await svc.summon(
+        owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
+    )
+    with pytest.raises(NotFoundError):
+        await svc.summon(
+            owner_subject=OTHER, knowbot_id=bot_id, version="1", runtime="knowbench"
+        )
+    checker.down = True
+    assert (await svc.check_bindings())["skipped"] == "knowbase_unavailable"
+    checker.down = False
+    checker.states.clear()
+    assert (await svc.check_bindings())["released"] == 1
+    assert repo.versions[(result.knowbot_id, "1")].status == "active"
+    # 停用了的不再核
+    await repo.set_version_status(result.knowbot_id, "1", "stopped")
+    checker.states[BOUND] = {"state": "gone", "license": None, "shareable": False}
+    assert (await svc.check_bindings())["checked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_a_replay_must_match_public_and_category_too() -> None:
+    """同一交付单号重放：公开与否、类目也要一样，不一样 409（第二轮审查第 3 条）。"""
+    svc = KnowbotService(MemoryKnowbots(), bindings=AllShareable())
+    await _deliver(svc, "knowlab-delivery-1", manifest(), category="tools.lookup")
+    again = await _deliver(
+        svc, "knowlab-delivery-1", manifest(), category="tools.lookup"
+    )
+    assert again.replayed
+    for kw in ({"request_public": True}, {"category": "tools.office"}):
+        with pytest.raises(ConcurrencyConflictError) as error:
+            await _deliver(svc, "knowlab-delivery-1", manifest(), **kw)
+        assert error.value.code == "delivery_id_reused"
+
+
+@pytest.mark.asyncio
+async def test_withdraw_public_clears_public_and_releases_public_only_hold() -> None:
+    """收回公开（第 8 条）：只撤掉该版的 public_allowed、保留自用上架；若此前仅因公开
+    许可不够而挂起则恢复 active。"""
+    checker = AllShareable()
+    repo = MemoryKnowbots()
+    svc = KnowbotService(repo, bindings=checker, public_market=True)
+    result = await svc.deliver(
+        delivery_id="knowlab-delivery-1",
+        owner_subject=OWNER,
+        knowbot_ref="knowlab-r1",
+        manifest=manifest(),
+        request_public=True,
+    )
+    bot_id = str(result.knowbot_id)
+    checker.states[BOUND] = {"state": "live", "license": "self", "shareable": False}
+    await svc.check_bindings()
+    assert repo.versions[(result.knowbot_id, "1")].status == "held"
+    await svc.withdraw_public(owner_subject=OWNER, knowbot_id=bot_id, version="1")
+    v = repo.versions[(result.knowbot_id, "1")]
+    assert not v.public_allowed and v.status == "active" and v.held_reason is None
+    # 主人自用召唤照常可用
+    await svc.summon(
+        owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
+    )

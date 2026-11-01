@@ -10,7 +10,7 @@ from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService
 from app.interfaces.endpoints import expert_routes
 from app.main import app
-from tests.knowbot_fakes import MemoryKnowbots, manifest
+from tests.knowbot_fakes import AllShareable, MemoryKnowbots, manifest
 from tests.test_auth_routes_security import FakeAuthService, session
 
 OWNER = "user-123"  # 会话里的用户（tests/test_auth_routes_security.session）
@@ -37,7 +37,7 @@ def client(signed_in: bool = True) -> httpx.AsyncClient:
 
 async def deliver(repo, owner: str, ref: str, **kw):
     return (
-        await KnowbotService(repo).deliver(
+        await KnowbotService(repo, bindings=AllShareable()).deliver(
             delivery_id=f"delivery-{ref}",
             owner_subject=owner,
             knowbot_ref=ref,

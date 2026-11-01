@@ -12,7 +12,9 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Any, Literal, Protocol
 
-VersionStatus = Literal["active", "stopped"]
+# held：待处理——在售那一版所绑的数据失效（删、禁用、许可改低），别人请不了，作者
+# 在小店里看得到原因（0043 第 4.3 节；数据拓扑第十节第 5 条）；数据好了自动回 active
+VersionStatus = Literal["active", "held", "stopped"]
 Visibility = Literal["private", "public"]
 
 
@@ -26,6 +28,8 @@ class KnowbotVersionRecord:
     delivered_at: datetime
     manifest: dict[str, Any] = field(repr=False)
     public_allowed: bool = False  # knowlab 把这一版审成公开（Fable 评审 P2-2）
+    held_reason: str | None = None  # 待处理的原因（delivery.HOLD_REASONS）
+    held_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +106,31 @@ class KnowbotRepository(Protocol):
         self, knowbot_id: uuid.UUID, version: str, status: VersionStatus
     ) -> None: ...
 
+    async def allow_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        """这一版先交成自用、后转公开：放开给别人看、给别人请。"""
+        ...
+
+    async def withdraw_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        """收回这一版的公开：只撤掉 public_allowed，保留自用。"""
+        ...
+
+    async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None: ...
+
+    async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
+        """后台要核的（主人, 版本）：审成公开、还在售或待处理、清单里有绑定的。"""
+        ...
+
+    async def hold_version(
+        self,
+        knowbot_id: uuid.UUID,
+        version: str,
+        reason: str | None,
+        at: datetime,
+    ) -> bool:
+        """reason 给了：在售的转待处理（待处理的照新原因写）；None：待处理的回在售。
+        停用了的不动。改了回 True。"""
+        ...
+
     async def list_visible(
         self, owner_subject: str, *, public_market: bool, today: date
     ) -> Sequence[KnowbotRecord]:
@@ -111,6 +140,10 @@ class KnowbotRepository(Protocol):
 
     async def owner_shop_open(self, owner_subject: str) -> bool:
         """主人的小店没被停；停店期间别人请不了（SDD 0018 第十一节第 7 之二小节）。"""
+        ...
+
+    async def find_by_source(self, source_ref: str) -> KnowbotRecord | None:
+        """这个 knowlab 引用对应的分身（带版本）；还没交付过的回 None。"""
         ...
 
     async def owner_of_source(self, source_ref: str) -> str | None:
@@ -132,4 +165,16 @@ class KnowbotRepository(Protocol):
     ) -> PublisherRecord | None:
         """发布主体在这个类目上有审核通过、未过期的资质时返回它（带这些资质），
         否则 None。"""
+        ...
+
+
+class BindingChecker(Protocol):
+    """knowbase 核专家所绑数据（0043 第 4.3 节）：
+    `POST /service/expert-bindings/check`。"""
+
+    async def binding_states(
+        self, items: Sequence[tuple[str, str, int, str | None]]
+    ) -> list[dict[str, Any]]:
+        """（作者, 资料, 版本, 冻结依据）→ 与之一一对应的
+        {state, license, frozen_license, shareable}。"""
         ...

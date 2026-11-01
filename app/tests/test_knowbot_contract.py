@@ -8,11 +8,14 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.knowbots.schema import render
+from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
+from app.domain.knowbots.schema import render, render_delivery
 from tests.knowbot_fakes import manifest
 
 CONTRACT_DIR = Path(__file__).resolve().parents[3] / "contracts/knowbot/v2"
 SCHEMA = CONTRACT_DIR / "knowbot-manifest.schema.json"
+DELIVERY_DIR = Path(__file__).resolve().parents[3] / "contracts/knowbot-delivery/v1"
+DELIVERY = DELIVERY_DIR / "knowbot-delivery.schema.json"
 
 
 def _require_contract() -> None:
@@ -46,3 +49,27 @@ def test_example_manifest_satisfies_the_published_schema() -> None:
     jsonschema = pytest.importorskip("jsonschema")
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.validate(manifest(), schema)
+
+
+# —— 交付请求 knowbot-delivery/v1（带类目，0032 待定第一项）——
+
+
+def test_delivery_schema_is_generated_and_its_digest_matches() -> None:
+    _require_contract()
+    assert DELIVERY.read_text(encoding="utf-8") == render_delivery(), (
+        "regenerate: python -m app.domain.knowbots.schema delivery > "
+        "../../contracts/knowbot-delivery/v1/knowbot-delivery.schema.json"
+    )
+    release = json.loads((DELIVERY_DIR / "contract-manifest.json").read_text())
+    assert (release["contract"], release["major_version"]) == ("knowbot-delivery", 1)
+    assert release["schema"] == DELIVERY.name
+    assert release["sha256"] == hashlib.sha256(DELIVERY.read_bytes()).hexdigest()
+
+
+def test_delivery_categories_are_the_catalog_without_uncategorized() -> None:
+    _require_contract()
+    schema = json.loads(DELIVERY.read_text(encoding="utf-8"))
+    [codes] = [
+        a["enum"] for a in schema["properties"]["category"]["anyOf"] if "enum" in a
+    ]
+    assert codes == [c.code for c in CATEGORIES if c.code != DEFAULT_CATEGORY]

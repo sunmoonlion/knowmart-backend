@@ -21,6 +21,7 @@ from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketService
 from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
+from app.domain.knowbots.delivery import KnowbotDeliveryV1
 from app.domain.market import DemandIn
 from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
@@ -72,16 +73,6 @@ class Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DeliveryIn(Strict):
-    delivery_id: str = Field(min_length=8, max_length=128)
-    owner_subject: str = Field(min_length=1, max_length=512)
-    knowbot_ref: str = Field(min_length=1, max_length=128)
-    manifest: dict[str, Any]
-    # knowlab 运营审核定了公开（SDD 0037 第十八之二节）：
-    # 资质过的进上架审核，不过的留自用
-    request_public: bool = False
-
-
 class SummonReturnIn(Strict):
     source: str = Field(alias="from", min_length=1, max_length=64)
     ref: str | None = Field(default=None, max_length=256)
@@ -90,14 +81,16 @@ class SummonReturnIn(Strict):
 @internal_router.post("/deliveries")
 async def deliver(
     _: Annotated[ServiceCaller, Depends(require_deliver_service)],
-    body: DeliveryIn,
+    body: KnowbotDeliveryV1,
     svc: Service,
     market: Annotated[MarketService, Depends(market_for_request)],
 ) -> JSONResponse:
-    """knowlab 交付一个测试通过的版本。
+    """knowlab 交付一个测试通过的版本（契约 `knowbot-delivery/v1`）。
 
     幂等：同一交付单号重发，内容一样回 200，不一样回 409。版本号按清单里的记（knowlab
-    测试通过时定，可以有空号）。带了申请公开的，回这一位的上架状态。
+    测试通过时定，可以有空号）。带了申请公开的，回这一位的上架状态。收清单时硬查所绑
+    数据的许可，不行回 409（`binding_*`），knowbase 说不准回 503（0043 第 4.3 节）。
+    带了类目的记在专家上（0032 待定第一项）。
     """
     result = await svc.deliver(
         delivery_id=body.delivery_id,
@@ -105,6 +98,7 @@ async def deliver(
         knowbot_ref=body.knowbot_ref,
         manifest=body.manifest,
         request_public=bool(body.request_public),
+        category=body.category,
     )
     content: dict[str, Any] = {
         "contract_version": CONTRACT_VERSION,
@@ -146,6 +140,45 @@ async def stop_delivered_version(
         by_knowlab=True,
     )
     return Response(status_code=204, headers=NO_STORE)
+
+
+@internal_router.post(
+    "/owners/{owner_subject}/knowbots/{knowbot_id}/versions/{version}/withdraw-public",
+    status_code=204,
+)
+async def withdraw_public_version(
+    _: Annotated[ServiceCaller, Depends(require_deliver_service)],
+    svc: Service,
+    market: Annotated[MarketService, Depends(market_for_request)],
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+    knowbot_id: Annotated[str, Path(max_length=64)],
+    version: Annotated[str, Path(max_length=16)],
+) -> Response:
+    """knowlab 收回某一版的公开（转公开撤回撞上已收下）：只撤掉这一版的公开，保留
+    作者自用上架；这一位没有别的可公开版本时一并退回自用。"""
+    await svc.withdraw_public(
+        owner_subject=owner_subject,
+        knowbot_id=knowbot_id,
+        version=version,
+    )
+    await market.withdraw_public_on_delivery(owner_subject, knowbot_id)
+    return Response(status_code=204, headers=NO_STORE)
+
+
+@internal_router.get("/owners/{owner_subject}/sources/{knowbot_ref}/versions")
+async def source_versions(
+    _: Annotated[ServiceCaller, Depends(require_deliver_service)],
+    svc: Service,
+    owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+    knowbot_ref: Annotated[str, Path(min_length=1, max_length=128)],
+) -> JSONResponse:
+    """knowlab 取回它交来的各版现在怎样：在售、待处理（所绑数据失效）与原因、停用、
+    给不给别人请（0043 第 4.3 节）。服务关系同交付；只收 `knowlab-` 开头的引用。"""
+    versions = await svc.source_versions(owner_subject, knowbot_ref)
+    return JSONResponse(
+        content={"contract_version": CONTRACT_VERSION, "versions": versions},
+        headers=NO_STORE,
+    )
 
 
 class UnlistedIn(Strict):

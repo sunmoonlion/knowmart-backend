@@ -64,9 +64,14 @@ def _seen_by(bot: KnowbotRecord, viewer: str) -> KnowbotRecord:
     return replace(bot, versions=tuple(v for v in bot.versions if v.public_allowed))
 
 
-def _latest(bot: KnowbotRecord) -> KnowbotVersionRecord | None:
+def _usable(version: KnowbotVersionRecord, owned: bool) -> bool:
+    """请得了：在售的；待处理的（所绑数据失效，0043 第 4.3 节）只有主人请得了。"""
+    return version.status == "active" or (owned and version.status == "held")
+
+
+def _latest(bot: KnowbotRecord, owned: bool = False) -> KnowbotVersionRecord | None:
     """最新的可用版；都停用了就是最新的一版（还能看，请不了）。"""
-    active = [v for v in bot.versions if v.status == "active"]
+    active = [v for v in bot.versions if _usable(v, owned)]
     pool = active or list(bot.versions)
     return max(pool, key=lambda v: int(v.version)) if pool else None
 
@@ -106,7 +111,8 @@ class ExpertCatalog:
         return True
 
     def _item(self, bot: KnowbotRecord, owner_subject: str) -> dict[str, Any]:
-        latest = _latest(bot)
+        owned = bot.owner_subject == owner_subject
+        latest = _latest(bot, owned)
         assert latest is not None
         return {
             "knowbot_id": str(bot.id),
@@ -114,7 +120,7 @@ class ExpertCatalog:
             "tagline": bot.tagline,
             "category": category_view(bot.category),
             "version": latest.version,
-            "summonable": latest.status == "active",
+            "summonable": _usable(latest, owned),
             "updated_at": latest.delivered_at.isoformat(),
             "owned": bot.owner_subject == owner_subject,
         }
@@ -175,7 +181,7 @@ class ExpertCatalog:
                 raise _not_found()
             selected = next((v for v in bot.versions if v.version == version), None)
         else:
-            selected = _latest(bot)
+            selected = _latest(bot, owned)
         if selected is None:
             raise _not_found()
         outcomes = (
@@ -190,13 +196,15 @@ class ExpertCatalog:
             "category": category_view(bot.category),
             "owned": owned,
             "version": selected.version,
-            "summonable": selected.status == "active",
+            "summonable": _usable(selected, owned),
             "updated_at": selected.delivered_at.isoformat(),
             "versions": [
                 {
                     "version": v.version,
                     "status": v.status,
                     "delivered_at": v.delivered_at.isoformat(),
+                    # 待处理的原因只给主人看（作者在小店里看得到原因）
+                    "held_reason": v.held_reason if owned else None,
                 }
                 for v in sorted(
                     bot.versions, key=lambda v: int(v.version), reverse=True
@@ -231,11 +239,12 @@ class ExpertCatalog:
         按名称排，匹配由用户自己的模型按专家自述的范围做。"""
         out: list[dict[str, Any]] = []
         for bot in await self._visible(owner_subject):
+            owned = bot.owner_subject == owner_subject
             usable = [
                 v
                 for v in bot.versions
-                if v.status == "active"
-                and (bot.owner_subject == owner_subject or v.public_allowed)
+                if _usable(v, owned)
+                and (owned or v.public_allowed)
                 and v.manifest.get("runtime") == runtime
             ]
             if not usable:

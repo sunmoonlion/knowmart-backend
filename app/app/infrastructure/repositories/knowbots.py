@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import and_, exists, func, or_, select, update
@@ -43,6 +43,8 @@ def _version(row: KnowbotVersion) -> KnowbotVersionRecord:
         delivered_at=row.delivered_at,
         manifest=row.manifest,
         public_allowed=row.public_allowed,
+        held_reason=row.held_reason,
+        held_at=row.held_at,
     )
 
 
@@ -257,6 +259,12 @@ class SqlKnowbotRepository:
         """主人的小店没被停（没开过店的也算开着）。"""
         return await shop_open(self.session, owner_subject)
 
+    async def find_by_source(self, source_ref: str) -> KnowbotRecord | None:
+        found = await self._with_versions(
+            select(Knowbot).where(Knowbot.source_ref == source_ref)
+        )
+        return found[0] if found else None
+
     async def owner_of_source(self, source_ref: str) -> str | None:
         return (
             await self.session.execute(
@@ -371,5 +379,87 @@ class SqlKnowbotRepository:
                 KnowbotVersion.knowbot_id == knowbot_id,
                 KnowbotVersion.version == version,
             )
-            .values(status=status)
+            # 停用待处理的那一版：原因跟着清掉（约束：只有待处理的带原因）
+            .values(status=status, held_reason=None, held_at=None)
         )
+
+    async def allow_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        await self.session.execute(
+            update(KnowbotVersion)
+            .where(
+                KnowbotVersion.knowbot_id == knowbot_id,
+                KnowbotVersion.version == version,
+            )
+            .values(public_allowed=True)
+        )
+
+    async def withdraw_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        row = await self.session.get(
+            KnowbotVersion, (knowbot_id, version), with_for_update=True
+        )
+        if row is None:
+            return
+        row.public_allowed = False
+        if row.status == "held" and row.held_reason in (
+            "binding_not_shareable",
+            "binding_frozen_self_only",
+        ):
+            row.status = "active"
+            row.held_reason = None
+            row.held_at = None
+        await self.session.flush()
+
+    async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None:
+        await self.session.execute(
+            update(Knowbot).where(Knowbot.id == knowbot_id).values(category=category)
+        )
+
+    async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
+        rows = (
+            await self.session.execute(
+                select(Knowbot.owner_subject, KnowbotVersion)
+                .join(Knowbot, Knowbot.id == KnowbotVersion.knowbot_id)
+                .where(
+                    KnowbotVersion.public_allowed.is_(True),
+                    KnowbotVersion.status.in_(("active", "held")),
+                )
+                .order_by(KnowbotVersion.knowbot_id, KnowbotVersion.version)
+            )
+        ).all()
+        return [
+            (owner, _version(v))
+            for owner, v in rows
+            if isinstance(v.manifest.get("bindings"), list) and v.manifest["bindings"]
+        ]
+
+    async def hold_version(
+        self,
+        knowbot_id: uuid.UUID,
+        version: str,
+        reason: str | None,
+        at: datetime,
+    ) -> bool:
+        where = [
+            KnowbotVersion.knowbot_id == knowbot_id,
+            KnowbotVersion.version == version,
+        ]
+        if reason is None:
+            values: dict[str, Any] = {
+                "status": "active",
+                "held_reason": None,
+                "held_at": None,
+            }
+            where.append(KnowbotVersion.status == "held")
+        else:
+            values = {"status": "held", "held_reason": reason, "held_at": at}
+            where += [
+                KnowbotVersion.status.in_(("active", "held")),
+                or_(
+                    KnowbotVersion.held_reason.is_(None),
+                    KnowbotVersion.held_reason != reason,
+                ),
+            ]
+        result = await self.session.execute(
+            update(KnowbotVersion).where(*where).values(**values)
+        )
+        return bool(result.rowcount)

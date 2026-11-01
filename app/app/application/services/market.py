@@ -610,10 +610,52 @@ class MarketService:
             )
         return "pending"
 
+    async def withdraw_public_on_delivery(self, subject: str, knowbot_id: str) -> str:
+        """knowlab 收回某一版的公开（转公开交付撤回撞上已收下）：如果这一位再没有别的
+        可公开版本，且条目还在待审或已公开（非平台下架），退回自用，不留在公开待审里。"""
+        bot = await self.repo.get_knowbot(knowbot_id)
+        if bot is None or bot["owner_subject"] != subject:
+            raise _missing("knowbot")
+        known = await self.knowbots.get_knowbot(bot["id"])
+
+        has_public_version = known is not None and any(
+            v.public_allowed and v.status != "stopped" for v in known.versions
+        )
+        if not has_public_version and bot["listing_status"] not in (
+            "self",
+            "taken_down",
+        ):
+            async with self.repo.transaction():
+                await self.repo.update_knowbot(
+                    bot["id"],
+                    visibility="private",
+                    listing_status="self",
+                    listing_review_note=None,
+                )
+            return "self"
+        return str(bot["listing_status"])
+
     async def my_experts(self, subject: str) -> list[Row]:
-        """我的专家：上架状态、价格、审核说明、类目（「我发布的」里设置公开与价格）。"""
+        """我的专家：上架状态、价格、审核说明、类目（「我发布的」里设置公开与价格）；
+        待处理的那几版与原因（所绑数据失效，别人请不了，0043 第 4.3 节）。"""
+        held = {
+            str(bot.id): [
+                {
+                    "version": v.version,
+                    "reason": v.held_reason,
+                    "at": _iso(v.held_at),
+                }
+                for v in bot.versions
+                if v.status == "held"
+            ]
+            for bot in await self.knowbots.list_for_owner(subject)
+        }
         return [
-            {**expert_listing_view(bot), "category": category_view(bot["category"])}
+            {
+                **expert_listing_view(bot),
+                "category": category_view(bot["category"]),
+                "held": held.get(str(bot["id"]), []),
+            }
             for bot in await self.repo.knowbots_of(subject)
         ]
 

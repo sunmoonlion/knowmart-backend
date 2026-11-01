@@ -6,9 +6,11 @@ import copy
 import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from typing import Any
 
+from app.application.errors.exceptions import ServiceUnavailableError
 from app.application.ports.knowbots import (
     DeliveryRecord,
     KnowbotRecord,
@@ -210,6 +212,12 @@ class MemoryKnowbots:
     async def owner_shop_open(self, owner_subject: str) -> bool:
         return owner_subject not in self.suspended_shops
 
+    async def find_by_source(self, source_ref: str) -> KnowbotRecord | None:
+        for bot in self.bots.values():
+            if bot["source_ref"] == source_ref:
+                return self._record(bot)
+        return None
+
     async def owner_of_source(self, source_ref: str) -> str | None:
         for bot in self.bots.values():
             if bot["source_ref"] == source_ref:
@@ -253,12 +261,76 @@ class MemoryKnowbots:
         self, knowbot_id: uuid.UUID, version: str, status: VersionStatus
     ) -> None:
         old = self.versions[(knowbot_id, version)]
-        self.versions[(knowbot_id, version)] = KnowbotVersionRecord(
-            knowbot_id=old.knowbot_id,
-            version=old.version,
-            digest=old.digest,
-            status=status,
-            delivery_id=old.delivery_id,
-            delivered_at=old.delivered_at,
-            manifest=old.manifest,
+        self.versions[(knowbot_id, version)] = replace(
+            old, status=status, held_reason=None, held_at=None
         )
+
+    async def allow_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        old = self.versions[(knowbot_id, version)]
+        self.versions[(knowbot_id, version)] = replace(old, public_allowed=True)
+
+    async def withdraw_public(self, knowbot_id: uuid.UUID, version: str) -> None:
+        old = self.versions[(knowbot_id, version)]
+        held = old.status == "held" and old.held_reason in (
+            "binding_not_shareable",
+            "binding_frozen_self_only",
+        )
+        self.versions[(knowbot_id, version)] = replace(
+            old,
+            public_allowed=False,
+            status="active" if held else old.status,
+            held_reason=None if held else old.held_reason,
+            held_at=None if held else old.held_at,
+        )
+
+    async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None:
+        self.bots[knowbot_id]["category"] = category
+
+    async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
+        return [
+            (self.bots[k]["owner_subject"], v)
+            for (k, _), v in sorted(self.versions.items(), key=lambda x: str(x[0]))
+            if v.public_allowed
+            and v.status in ("active", "held")
+            and v.manifest.get("bindings")
+        ]
+
+    async def hold_version(
+        self, knowbot_id: uuid.UUID, version: str, reason: str | None, at: datetime
+    ) -> bool:
+        old = self.versions[(knowbot_id, version)]
+        if reason is None:
+            if old.status != "held":
+                return False
+            new = replace(old, status="active", held_reason=None, held_at=None)
+        else:
+            if old.status == "stopped" or old.held_reason == reason:
+                return False
+            new = replace(old, status="held", held_reason=reason, held_at=at)
+        self.versions[(knowbot_id, version)] = new
+        return True
+
+
+class AllShareable:
+    """knowbase 核所绑数据的替身：默认每份都在、都能经专家给别人用；测试改 `states`
+    （（作者, 资料, 版本）→ 那一份的回答）或 `down` 让它连不上。"""
+
+    def __init__(self) -> None:
+        self.states: dict[tuple[str, str, int], dict[str, Any]] = {}
+        self.asked: list[tuple[str, str, int]] = []
+        self.down = False
+
+    async def binding_states(
+        self, items: Sequence[tuple[str, str, int, str | None]]
+    ) -> list[dict[str, Any]]:
+        if self.down:
+            raise ServiceUnavailableError(
+                "knowbase is unreachable", code="knowbase_unavailable"
+            )
+        self.asked.extend(items)
+        return [
+            self.states.get(
+                i[:3], {"state": "live", "license": "via_expert", "shareable": True}
+            )
+            for i in items
+        ]

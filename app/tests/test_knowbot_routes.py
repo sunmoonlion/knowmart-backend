@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -16,7 +18,7 @@ from app.infrastructure.security.relation_auth import (
 )
 from app.interfaces.endpoints import knowbot_routes
 from app.main import app, settings
-from tests.knowbot_fakes import MemoryKnowbots, manifest
+from tests.knowbot_fakes import AllShareable, MemoryKnowbots, manifest
 from tests.test_auth_routes_security import FakeAuthService, session
 
 CSRF = "csrf-token-with-at-least-thirty-two-characters"
@@ -27,7 +29,7 @@ OWNER = "user-123"  # 会话里的用户（tests/test_auth_routes_security.sessi
 @pytest.fixture
 def wired(monkeypatch: pytest.MonkeyPatch):
     repo = MemoryKnowbots()
-    svc = KnowbotService(repo)
+    svc = KnowbotService(repo, bindings=AllShareable())
     fake_auth = FakeAuthService({"member": session("web", "profile:read")})
     monkeypatch.setattr(auth_middleware, "web_auth_service", fake_auth)
     app.dependency_overrides[knowbot_routes.service] = lambda: svc
@@ -61,6 +63,9 @@ class Summons:
     async def ask_public_on_delivery(self, subject: str, knowbot_id: str) -> str:
         self.calls.append({"ask_public": knowbot_id, "subject": subject})
         return "pending"
+
+    async def withdraw_public_on_delivery(self, subject: str, knowbot_id: str) -> None:
+        self.calls.append({"withdraw_public": knowbot_id, "subject": subject})
 
 
 SUMMONS = Summons()
@@ -130,6 +135,81 @@ async def test_delivery_may_ask_to_go_public(wired) -> None:
 
 
 @pytest.mark.asyncio
+async def test_delivery_carries_a_category_and_refuses_unlicensed_bindings(
+    wired,
+) -> None:
+    svc, repo = wired
+    async with client() as c:
+        body = {
+            "delivery_id": "delivery-0001",
+            "owner_subject": OWNER,
+            "knowbot_ref": "lab-bot-1",
+            "manifest": manifest(),
+            "category": "tools.lookup",
+        }
+        bad = await c.post(
+            "/api/internal/v1/knowmart/deliveries",
+            json={**body, "category": "uncategorized"},
+        )
+        assert bad.status_code == 422
+        svc.bindings.states[(OWNER, "m-1", 2)] = {
+            "state": "live",
+            "license": "self",
+            "shareable": False,
+        }
+        refused = await c.post(
+            "/api/internal/v1/knowmart/deliveries",
+            json={**body, "request_public": True},
+        )
+        assert (refused.status_code, refused.json()["code"]) == (
+            409,
+            "binding_not_shareable",
+        )
+        made = await c.post("/api/internal/v1/knowmart/deliveries", json=body)
+        assert made.status_code == 201, made.text
+    [bot] = await repo.list_for_owner(OWNER)
+    assert bot.category == "tools.lookup"
+
+
+@pytest.mark.asyncio
+async def test_knowlab_reads_back_how_its_versions_stand(wired) -> None:
+    """knowlab 取回交来的各版：待处理的带原因（0043 第 4.3 节）。"""
+    svc, repo = wired
+    async with client() as c:
+        made = await c.post(
+            "/api/internal/v1/knowmart/deliveries",
+            json={
+                "delivery_id": "knowlab-expert-1",
+                "owner_subject": OWNER,
+                "knowbot_ref": "knowlab-r1",
+                "manifest": manifest(),
+                "request_public": True,
+            },
+        )
+        bot = uuid.UUID(made.json()["knowbot_id"])
+        await repo.hold_version(bot, "1", "binding_deleted", datetime.now(UTC))
+        url = f"/api/internal/v1/knowmart/owners/{OWNER}/sources/knowlab-r1/versions"
+        got = await c.get(url)
+        assert got.json()["versions"] == [
+            {
+                "version": "1",
+                "status": "held",
+                "held_reason": "binding_deleted",
+                "public_allowed": True,
+            }
+        ]
+        other = await c.get(
+            "/api/internal/v1/knowmart/owners/someone/sources/knowlab-r1/versions"
+        )
+        assert other.json()["versions"] == []
+        assert (
+            await c.get(
+                f"/api/internal/v1/knowmart/owners/{OWNER}/sources/lab-1/versions"
+            )
+        ).status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_knowlab_stops_a_version_of_its_owner(wired) -> None:
     async with client() as c:
         native = (await _deliver(c, "delivery-0002")).json()["knowbot_id"]
@@ -149,6 +229,33 @@ async def test_knowlab_stops_a_version_of_its_owner(wired) -> None:
             assert stopped.status_code == 204
         summon = f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{knowbot}@1"
         assert (await c.get(summon)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_knowlab_withdraws_public_without_stopping_version(wired) -> None:
+    async with client() as c:
+        made = await c.post(
+            "/api/internal/v1/knowmart/deliveries",
+            json={
+                "delivery_id": "delivery-0010",
+                "owner_subject": OWNER,
+                "knowbot_ref": "knowlab-r2",
+                "manifest": manifest(),
+                "request_public": True,
+            },
+        )
+        knowbot = made.json()["knowbot_id"]
+        base = f"/api/internal/v1/knowmart/owners/{{owner}}/knowbots/{knowbot}"
+        assert (
+            await c.post(
+                base.format(owner="someone-else") + "/versions/1/withdraw-public"
+            )
+        ).status_code == 404
+        for _ in range(2):
+            res = await c.post(base.format(owner=OWNER) + "/versions/1/withdraw-public")
+            assert res.status_code == 204
+        summon = f"/api/internal/v1/knowmart/owners/{OWNER}/knowbots/{knowbot}@1"
+        assert (await c.get(summon)).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -219,6 +326,10 @@ async def test_internal_routes_require_their_own_relation() -> None:
         assert no_token.status_code == 401
         no_token = await c.post(
             "/api/internal/v1/knowmart/owners/u/knowbots/x/versions/1/stop"
+        )
+        assert no_token.status_code == 401
+        no_token = await c.post(
+            "/api/internal/v1/knowmart/owners/u/knowbots/x/versions/1/withdraw-public"
         )
         assert no_token.status_code == 401
         no_token = await c.put(

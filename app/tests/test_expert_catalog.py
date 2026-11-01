@@ -16,7 +16,7 @@ from app.application.services.expert_catalog import (
 )
 from app.application.services.knowbot_service import KnowbotService
 from app.domain.knowbots.catalog import expert_sections
-from tests.knowbot_fakes import MemoryKnowbots, manifest
+from tests.knowbot_fakes import AllShareable, MemoryKnowbots, manifest
 
 ME = "user-me"
 OTHER = "user-other"
@@ -24,7 +24,7 @@ NOW = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
 
 
 async def deliver(repo, owner: str, ref: str, version: str = "1", **kw) -> uuid.UUID:
-    result = await KnowbotService(repo).deliver(
+    result = await KnowbotService(repo, bindings=AllShareable()).deliver(
         delivery_id=f"delivery-{ref}-{version}",
         owner_subject=owner,
         knowbot_ref=ref,
@@ -310,7 +310,9 @@ async def test_a_version_reviewed_for_self_use_stays_with_its_owner() -> None:
     """knowlab 把第 1 版审成公开、第 2 版审成自用：别人看到、请到的是第 1 版，第 2 版
     只给主人（Fable 评审 P2-2）。"""
     repo = MemoryKnowbots()
-    svc = KnowbotService(repo, public_market=True, now=lambda: NOW)
+    svc = KnowbotService(
+        repo, public_market=True, bindings=AllShareable(), now=lambda: NOW
+    )
     first = await svc.deliver(
         delivery_id="knowlab-expert-1",
         owner_subject=ME,

@@ -12,7 +12,8 @@
   service_client.py：成交后请 knowbase 给买家建使用权，只到成交那一版，不复制；
   后台定时成批核条目里的资料还交给着 knowmart、还能卖（没有卖家本人的令牌，用同一个
   服务身份；`POST /service/market-offers/check`，knowbase 那头待加，形状见
-  offer_states）。
+  offer_states）；收清单时硬查、后台定时核专家所绑的数据（同一个服务身份；
+  `POST /service/expert-bindings/check`，0043 第 4.3 节）。
 knowbase 回 4xx 抛 KnowbaseRefused（带它的 code，调用方转成自己的话）；不可达、5xx 抛
 ServiceUnavailableError。令牌只在内存里，不进日志。
 """
@@ -38,6 +39,7 @@ BASE = "/api/internal/v2/user-data"
 COLUMN = "knowmart"  # knowbase 里本应用的栏：用户交给 knowmart 的资料
 SALE = "sale"  # 资料的许可档「可以出售」：只有这一档能上架
 OFFER_STATES = frozenset({"offered", "not_for_sale", "gone"})
+BINDING_STATES = frozenset({"live", "deleted", "disabled", "gone"})
 
 
 class KnowbaseRefused(Exception):
@@ -103,6 +105,15 @@ class KnowbaseLibrary:
         token = await self._service_token("user-data-purchase")
         return await self._send(
             "POST", "/service/market-offers/check", token, json={"items": items}
+        )
+
+    async def binding_states(self, items: list[dict[str, Any]]) -> Any:
+        """成批核专家所绑的（作者, 资料, 版本）：请求 {"items": [{"owner",
+        "material_id", "version_no"}]}（1 到 200 份），回 {"items": [{..., "state",
+        "license", "shareable"}]}，state 是 live / deleted / disabled / gone。只读。"""
+        token = await self._service_token("user-data-purchase")
+        return await self._send(
+            "POST", "/service/expert-bindings/check", token, json={"items": items}
         )
 
     # —— 内部 ——
@@ -219,6 +230,51 @@ class KnowbaseVault:
             # 只认问过的、认得的状态；别的当没回（不据此下架）
             if key in asked and row.get("state") in OFFER_STATES:
                 out[key] = str(row["state"])
+        return out
+
+    async def binding_states(
+        self, items: Sequence[tuple[str, str, int, str | None]]
+    ) -> list[dict[str, Any]]:
+        """端口 BindingChecker：按问的顺序回每份的状态；回包对不上就当 knowbase 出错
+        （不据此收清单、不据此改在售状态）。"""
+        if not items:
+            return []
+        try:
+            answer = await self.client.binding_states(
+                [
+                    {"owner": owner, "material_id": m, "version_no": v}
+                    | ({"basis_ref": ref} if ref else {})
+                    for owner, m, v, ref in items
+                ]
+            )
+        except KnowbaseRefused as exc:
+            raise BadGatewayError("knowbase refused", code=exc.code) from None
+        rows = answer.get("items") if isinstance(answer, dict) else None
+        if not isinstance(rows, list) or len(rows) != len(items):
+            raise ServiceUnavailableError(
+                "knowbase answered the binding check partly",
+                code="knowbase_unavailable",
+            )
+        out: list[dict[str, Any]] = []
+        for (owner, material_id, version_no, _), row in zip(items, rows, strict=True):
+            if (
+                not isinstance(row, dict)
+                or (row.get("owner"), row.get("material_id"), row.get("version_no"))
+                != (owner, material_id, version_no)
+                or row.get("state") not in BINDING_STATES
+            ):
+                raise ServiceUnavailableError(
+                    "knowbase answered the binding check out of order",
+                    code="knowbase_unavailable",
+                )
+            out.append(
+                {
+                    "state": row["state"],
+                    "license": row.get("license"),
+                    "frozen_license": row.get("frozen_license"),
+                    "shareable": row.get("shareable") is True,
+                }
+            )
         return out
 
     async def purchase(

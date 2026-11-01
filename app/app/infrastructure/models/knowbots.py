@@ -176,11 +176,19 @@ class KnowbotVersion(Base):
     )
     # knowlab 运营把这一版审成「公开」的才给别人看、给别人请（Fable 评审 P2-2）
     public_allowed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # 待处理（held）的原因与时刻：所绑数据失效（0043 第 4.3 节，迁移 20261030_0013）
+    held_reason: Mapped[str | None] = mapped_column(String(32))
+    held_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
         UniqueConstraint("delivery_id", name="uq_knowbot_version_delivery_id"),
         CheckConstraint(
-            "status IN ('active', 'stopped')", name="ck_knowbot_version_status"
+            "status IN ('active', 'held', 'stopped')",
+            name="ck_knowbot_version_status",
+        ),
+        CheckConstraint(
+            "(status = 'held') = (held_reason IS NOT NULL)",
+            name="ck_knowbot_version_held_reason",
         ),
     )
 
