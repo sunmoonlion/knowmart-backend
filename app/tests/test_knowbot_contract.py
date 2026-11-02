@@ -6,6 +6,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import jsonschema
 import pytest
 
 from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
@@ -46,7 +47,6 @@ def test_v1_contract_is_gone() -> None:
 
 def test_example_manifest_satisfies_the_published_schema() -> None:
     _require_contract()
-    jsonschema = pytest.importorskip("jsonschema")
     schema = json.loads(SCHEMA.read_text(encoding="utf-8"))
     jsonschema.validate(manifest(), schema)
 
