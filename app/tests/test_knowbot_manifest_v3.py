@@ -88,15 +88,33 @@ def test_v2_canonical_digest_matches_pre_dynamic_baseline():
     )
 
 
-def test_actual_compiler_fixture_is_accepted_without_rewriting_the_catalog():
-    fixture = (
-        Path(__file__).resolve().parents[4]
-        / "knowbench-app/knowbench-backend/app/tests/fixtures"
-        / "dynamic-methods-manifest.json"
-    )
-    if not fixture.exists():
-        pytest.skip("knowbench checkout required")
-    doc = json.loads(fixture.read_text())
+@pytest.mark.parametrize(
+    "filename", ["dynamic-methods-manifest.json", "referenced-methods-manifest.json"]
+)
+def test_actual_compiler_fixture_is_accepted_without_rewriting_the_catalog(filename):
+    doc = compiled_manifest(filename)
     parsed = parse_manifest(doc)
     assert parsed.pack == doc["pack"]
     assert parse_manifest(parsed.canonical()).digest() == parsed.digest()
+
+
+def test_reference_catalog_requires_explicit_runtime_and_snapshot():
+    doc = manifest()
+    doc["pack"]["method_sources"] = {"inspect": {}}
+    with pytest.raises(ValueError):
+        parse_manifest(doc)
+    doc["pack"]["runtime_contract"] = "knowbench/dynamic-methods/v2"
+    doc["pack"]["method_sources"] = {}
+    with pytest.raises(ValueError):
+        parse_manifest(doc)
+
+
+def compiled_manifest(filename):
+    fixture = (
+        Path(__file__).resolve().parents[4]
+        / "knowbench-app/knowbench-backend/app/tests/fixtures"
+        / filename
+    )
+    if not fixture.exists():
+        pytest.skip("knowbench checkout required")
+    return json.loads(fixture.read_text())

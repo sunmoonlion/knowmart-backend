@@ -113,10 +113,17 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dynamic_catalog_delivery_is_idempotent_and_version_is_immutable(db):
+@pytest.mark.parametrize("referenced", [False, True])
+async def test_dynamic_catalog_delivery_is_idempotent_and_version_is_immutable(
+    db, referenced
+):
     from tests.test_knowbot_manifest_v3 import manifest as dynamic_manifest
 
     doc = dynamic_manifest()
+    if referenced:
+        from tests.test_knowbot_manifest_v3 import compiled_manifest
+
+        doc = compiled_manifest("referenced-methods-manifest.json")
     first = await deliver(db, "dynamic-delivery-0001", doc)
     assert (await deliver(db, "dynamic-delivery-0001", doc)).replayed
     async with db() as session:

@@ -132,8 +132,19 @@ class KnowbotManifestV3(ManifestEnvelope[Literal["knowbot-manifest/v3"]]):
     def _pack_skeleton(cls, pack: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(pack.get("pack_id"), str) or not pack["pack_id"]:
             raise ValueError("pack.pack_id is required")
-        if pack.get("runtime_contract") != "knowbench/dynamic-methods/v1":
+        if pack.get("runtime_contract") not in (
+            "knowbench/dynamic-methods/v1",
+            "knowbench/dynamic-methods/v2",
+        ):
             raise ValueError("unsupported dynamic runtime contract")
+        if pack["runtime_contract"].endswith("/v2"):
+            if (
+                not isinstance(pack.get("method_sources"), dict)
+                or not pack["method_sources"]
+            ):
+                raise ValueError("referenced catalog requires method_sources")
+        elif "method_sources" in pack:
+            raise ValueError("method references require dynamic-methods/v2")
         if "workflow" in pack:
             raise ValueError("a method catalog must not contain a workflow")
         if not isinstance(pack.get("method_units"), list) or not pack["method_units"]:
