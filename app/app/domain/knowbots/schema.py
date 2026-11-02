@@ -1,7 +1,7 @@
 """从模型生成 knowmart 当提供方的两份 JSON Schema。
 
-- 清单 `knowbot-manifest/v2`：契约文件在父仓 contracts/knowbot/v2/（v1 已删，decisions
-  ⑰）；
+- 固定清单 `knowbot-manifest/v2` 与动态清单 v3：契约文件在父仓 contracts/knowbot/v2/
+  及 v3/（v1 已删，decisions ⑰）；
 - 交付请求 `knowbot-delivery/v1`（带类目，0032 待定第一项）：契约文件在父仓
   contracts/knowbot-delivery/v1/。
 
@@ -19,9 +19,9 @@ import sys
 from typing import Any
 
 from app.domain.knowbots.delivery import KnowbotDeliveryV1
-from app.domain.knowbots.manifest import KnowbotManifestV2
+from app.domain.knowbots.manifest import KnowbotManifestV2, KnowbotManifestV3
 
-MODELS: dict[int, type] = {2: KnowbotManifestV2}
+MODELS: dict[int, type] = {2: KnowbotManifestV2, 3: KnowbotManifestV3}
 
 
 def schema_id(major: int) -> str:

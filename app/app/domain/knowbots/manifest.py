@@ -8,6 +8,7 @@
 清单 v2（10-28 起，decisions ⑭）= 逻辑 + 作者挑选的数据：没有数据需求声明，每件
 委托要什么数据由委托第 0 步用户自己的模型按专家逻辑和用户问题提出、用户确认。
 v1（数据需求声明、knowlab 数据集绑定）不再收（10-28，decisions ⑰）。
+v3（WP-10）显式发布动态作者目录，旧 v2 固定专家保持原样；目录的完整规则仍归运行方。
 
 摘要是外层规范 JSON（键排序、紧凑分隔、UTF-8）的 sha256：同一个版本只认一份内容。
 """
@@ -16,7 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Literal
+from typing import Any, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -56,6 +57,7 @@ def manifest_digest(document: dict[str, Any]) -> str:
 
 
 SCHEMA_V2 = "knowbot-manifest/v2"
+SCHEMA_V3 = "knowbot-manifest/v3"
 _FROZEN = r"^expert:[A-Za-z0-9._-]{1,64}@[0-9][0-9.]{0,31}$"
 
 
@@ -81,11 +83,11 @@ class FrozenBinding(Strict):
     basis_ref: str = Field(pattern=_FROZEN)
 
 
-class KnowbotManifestV2(Strict):
+class ManifestEnvelope[SchemaT: str](Strict):
     """清单 v2（SDD 0043 第三、四节）：逻辑 + 作者挑选的数据（只带冻结的引用）。
     不再有数据需求声明（decisions ⑭），也不再有 knowlab 数据集的绑定。"""
 
-    schema_: Literal["knowbot-manifest/v2"] = Field(alias="schema")
+    schema_: SchemaT = Field(alias="schema")
     name: str = Field(min_length=1, max_length=80)
     tagline: str = Field(default="", max_length=200)
     version: str = Field(pattern=r"^[1-9][0-9]{0,5}$")
@@ -100,7 +102,7 @@ class KnowbotManifestV2(Strict):
         return check_pack(pack)
 
     @model_validator(mode="after")
-    def _consistent(self) -> KnowbotManifestV2:
+    def _consistent(self) -> Self:
         if str(self.pack.get("version")) != self.version:
             raise ValueError("pack.version must equal the manifest version")
         pinned = [(b.material_id, b.version_no) for b in self.bindings]
@@ -117,12 +119,41 @@ class KnowbotManifestV2(Strict):
         return manifest_digest(self.canonical())
 
 
-def parse_manifest(document: object) -> KnowbotManifestV2:
-    """解析交付来的清单；超大、非对象、不是 v2、外层不合格都抛 ValueError。"""
+class KnowbotManifestV2(ManifestEnvelope[Literal["knowbot-manifest/v2"]]):
+    """清单 v2（SDD 0043 第三、四节）：逻辑 + 作者挑选的数据（只带冻结的引用）。
+    不再有数据需求声明（decisions ⑭），也不再有 knowlab 数据集的绑定。"""
+
+
+class KnowbotManifestV3(ManifestEnvelope[Literal["knowbot-manifest/v3"]]):
+    """动态作者方法目录；任务计划由运行方另存，不能混进发布清单。"""
+
+    @field_validator("pack")
+    @classmethod
+    def _pack_skeleton(cls, pack: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(pack.get("pack_id"), str) or not pack["pack_id"]:
+            raise ValueError("pack.pack_id is required")
+        if pack.get("runtime_contract") != "knowbench/dynamic-methods/v1":
+            raise ValueError("unsupported dynamic runtime contract")
+        if "workflow" in pack:
+            raise ValueError("a method catalog must not contain a workflow")
+        if not isinstance(pack.get("method_units"), list) or not pack["method_units"]:
+            raise ValueError("pack.method_units must be a non-empty list")
+        if not isinstance(pack.get("planning"), dict):
+            raise ValueError("pack.planning is required")
+        return pack
+
+
+KnowbotManifest = KnowbotManifestV2 | KnowbotManifestV3
+
+
+def parse_manifest(document: object) -> KnowbotManifest:
+    """解析交付来的 v2 固定 / v3 动态清单；未知版本或不合格外层抛 ValueError。"""
     if not isinstance(document, dict):
         raise ValueError("manifest must be an object")
     if len(canonical_bytes(document)) > MAX_MANIFEST_BYTES:
         raise ValueError("manifest is too large")
-    if document.get("schema") != SCHEMA_V2:
-        raise ValueError(f"manifest schema must be {SCHEMA_V2}")
-    return KnowbotManifestV2.model_validate(document)
+    if document.get("schema") == SCHEMA_V2:
+        return KnowbotManifestV2.model_validate(document)
+    if document.get("schema") == SCHEMA_V3:
+        return KnowbotManifestV3.model_validate(document)
+    raise ValueError(f"manifest schema must be {SCHEMA_V2} or {SCHEMA_V3}")

@@ -38,7 +38,7 @@ from app.domain.knowbots.delivery import (
     binding_items,
     binding_problem,
 )
-from app.domain.knowbots.manifest import KnowbotManifestV2, parse_manifest
+from app.domain.knowbots.manifest import KnowbotManifest, parse_manifest
 
 DELIVERY_ID = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 SOURCE_REF = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -93,7 +93,7 @@ class KnowbotService:
         self.now = now
 
     async def _check_bindings(
-        self, owner_subject: str, parsed: KnowbotManifestV2, *, public: bool
+        self, owner_subject: str, parsed: KnowbotManifest, *, public: bool
     ) -> None:
         """收清单时硬查（0043 第 4.3 节「两种许可检查」）：不行回 409 带原因。"""
         if not parsed.bindings:

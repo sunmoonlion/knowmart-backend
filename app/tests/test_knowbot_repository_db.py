@@ -113,6 +113,28 @@ async def test_delivery_summon_list_and_stop_round_trip(db) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dynamic_catalog_delivery_is_idempotent_and_version_is_immutable(db):
+    from tests.test_knowbot_manifest_v3 import manifest as dynamic_manifest
+
+    doc = dynamic_manifest()
+    first = await deliver(db, "dynamic-delivery-0001", doc)
+    assert (await deliver(db, "dynamic-delivery-0001", doc)).replayed
+    async with db() as session:
+        svc = KnowbotService(SqlKnowbotRepository(session), bindings=AllShareable())
+        found = await svc.summon(
+            owner_subject=OWNER,
+            knowbot_id=str(first.knowbot_id),
+            version="1",
+            runtime="knowbench",
+        )
+        assert found.version.digest == first.digest
+        assert found.version.manifest["pack"] == doc["pack"]
+    doc["pack"]["planning"]["method_text"] = "changed method"
+    with pytest.raises(ConcurrencyConflictError):
+        await deliver(db, "dynamic-delivery-0002", doc)
+
+
+@pytest.mark.asyncio
 async def test_database_refuses_to_change_or_delete_a_delivered_version(db) -> None:
     await deliver(db, "delivery-0001", manifest())
     for statement in (
