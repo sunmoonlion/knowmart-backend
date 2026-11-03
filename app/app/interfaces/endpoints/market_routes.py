@@ -415,6 +415,8 @@ class TakeDownIn(BaseModel):
     target_id: str = Field(min_length=1, max_length=160)
     note: str = Field(min_length=1, max_length=2000)
 
+    violation: bool = Field(default=False, strict=True)
+
 
 @admin_router.get("/shops")
 async def admin_shops(
@@ -515,7 +517,9 @@ async def decide_expert(
 @admin_router.post("/takedown", status_code=204)
 async def take_down(admin: Admin, operator: Operator, body: TakeDownIn) -> Response:
     """平台下架：违规下架收回买家使用权；专家下架后不能再请，在跑的跑完。"""
-    await admin.take_down(body.kind, body.target_id, body.note, operator.subject, violation=body.violation)
+    await admin.take_down(
+        body.kind, body.target_id, body.note, operator.subject, violation=body.violation
+    )
     return Response(status_code=204, headers=NO_STORE)
 
 

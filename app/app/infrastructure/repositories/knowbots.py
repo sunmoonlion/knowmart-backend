@@ -9,10 +9,11 @@ import uuid
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import and_, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.application.ports.knowbots import (
@@ -462,4 +463,4 @@ class SqlKnowbotRepository:
         result = await self.session.execute(
             update(KnowbotVersion).where(*where).values(**values)
         )
-        return bool(result.rowcount)
+        return bool(cast(CursorResult, result).rowcount)

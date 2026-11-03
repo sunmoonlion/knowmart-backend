@@ -269,7 +269,12 @@ class MarketService:
         if sort == "name":
             chosen.sort(key=lambda x: (x[0]["name"], str(x[0]["id"])))
         elif sort == "category":
-            chosen.sort(key=lambda x: (sorted(x[1]["categories"])[0] if x[1]["categories"] else "", str(x[0]["id"])))
+            chosen.sort(
+                key=lambda x: (
+                    sorted(x[1]["categories"])[0] if x[1]["categories"] else "",
+                    str(x[0]["id"]),
+                )
+            )
         else:
             chosen.sort(key=lambda x: (x[1]["at"], str(x[0]["id"])), reverse=True)
         start = (page - 1) * PAGE_SIZE
@@ -728,7 +733,13 @@ class MarketService:
                 or price == 0
                 or f"{entry['knowbot_id']}@{entry['version']}" in bought
             )
-            out.append({**entry, "price": _money(price), "free": bool(free)})
+            out.append(
+                {
+                    **entry,
+                    "price": _money(None if price is None else Decimal(str(price))),
+                    "free": bool(free),
+                }
+            )
         return out
 
     async def _demand_offering(self, buyer: str, knowbot_id: str) -> uuid.UUID | None:
@@ -1609,8 +1620,7 @@ class MarketAdmin:
         )
         states: dict[tuple[str, str], str] = {}
         valid_pairs = [
-            (s, m) for s, m in pairs
-            if s and m and len(s) <= 255 and len(m) <= 64
+            (s, m) for s, m in pairs if s and m and len(s) <= 255 and len(m) <= 64
         ]
         for start in range(0, len(valid_pairs), OFFER_BATCH):
             batch = valid_pairs[start : start + OFFER_BATCH]
@@ -1635,7 +1645,8 @@ class MarketAdmin:
         for p in await self.repo.pending_publishers():
             matches_platform = bool(
                 self.platform_credit_code
-                and str(p.get("credit_code") or "").strip().upper() == self.platform_credit_code.strip().upper()
+                and str(p.get("credit_code") or "").strip().upper()
+                == self.platform_credit_code.strip().upper()
             )
             publishers.append(
                 {
@@ -1855,7 +1866,13 @@ class MarketAdmin:
             await self.repo.update_knowbot(found["id"], **changes)
 
     async def take_down(
-        self, kind: str, target_id: str, note: str, reviewer: str, *, violation: bool = False
+        self,
+        kind: str,
+        target_id: str,
+        note: str,
+        reviewer: str,
+        *,
+        violation: bool = False,
     ) -> None:
         """平台下架：知识买家那份照旧在；专家下架后不能再请（在跑的跑完）。"""
         now = self.now()
@@ -1876,7 +1893,9 @@ class MarketAdmin:
                     # 违规下架收回买家使用权留痕
                     trades = await self.repo.trades_for_listing(str(found["id"]))
                     for t in trades:
-                        await self.repo.update_trade(t["id"], failure="violation_taken_down")
+                        await self.repo.update_trade(
+                            t["id"], failure="violation_taken_down"
+                        )
             elif kind == "expert":
                 bot = await self.repo.get_knowbot(target_id.partition("@")[0])
                 if bot is None:
@@ -2109,7 +2128,10 @@ def shop_ref(shop: Row) -> Row:
 
 
 def shop_event_view(e: Row, *, for_admin: bool = False) -> Row:
-    """留痕给本人与运营看；停店、恢复是谁做的不给本人（只给说明）。运营看得到 by_subject。"""
+    """留痕给本人与运营看；停店、恢复是谁做的不给本人（只给说明）。
+
+    运营看得到 by_subject。
+    """
     out = {
         "kind": e["kind"],
         "old_name": e["old_name"],

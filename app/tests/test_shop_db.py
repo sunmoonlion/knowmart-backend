@@ -376,7 +376,14 @@ async def test_a_suspended_shop_stops_new_public_dealings_and_keeps_old_trades(
             "items"
         ] == []
         # 停店只挡卖方行为，店主发的需求照常进大厅（Opus 定）
-        assert len((await svc.demand_hall(kind=None, q=None, page=1, viewer=BUYER))["items"]) == 1
+        assert (
+            len(
+                (await svc.demand_hall(kind=None, q=None, page=1, viewer=BUYER))[
+                    "items"
+                ]
+            )
+            == 1
+        )
         with pytest.raises(NotFoundError):
             await svc.listing(BUYER, listing)
         with pytest.raises(ConcurrencyConflictError) as refused:
@@ -521,7 +528,9 @@ async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> N
     await world.run(check_expert_blocked)
 
     async with db() as session:
-        catalog = ExpertCatalog(SqlKnowbotRepository(session), public_market=True, now=lambda: NOW)
+        catalog = ExpertCatalog(
+            SqlKnowbotRepository(session), public_market=True, now=lambda: NOW
+        )
         # 本人查详情正常
         own_detail = await catalog.detail(SELLER, str(bot))
         assert own_detail["knowbot_id"] == str(bot)
@@ -543,6 +552,7 @@ async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> N
 
     # 3. 店名禁止词 NFKC 规范化匹配（含全角/零宽/空格）
     from app.domain.market import shop_name_words
+
     assert "荐股" in shop_name_words("荐 股 小 店")
     assert "荐股" in shop_name_words("荐\u200b股")
     assert "荐股" in shop_name_words("薦股") or "荐股" in shop_name_words("荐　股")
@@ -556,13 +566,22 @@ async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> N
 
     # 5. M2 平台因违规下架收回买家使用权并留痕
     knowledge_listing = await listed_knowledge(world, title="违规资料")
+
     async def buy_and_violate(svc: MarketService, admin: MarketAdmin) -> None:
         trade = await svc.buy(BUYER, knowledge_listing, BuyIn(request_id="buy-m2-001"))
         assert trade["status"] == "done"
         # 平台普通下架：买家那份保留（listing_state 为 off）
         # 平台违规下架：收回买家使用权并留痕
-        await admin.take_down("knowledge", knowledge_listing, "严重虚假宣传", OPS, violation=True)
-        [t] = [x for x in await svc.my_trades(BUYER, "buyer") if x["trade_id"] == trade["trade_id"]]
-        assert t["listing_state"] == "revoked" and t["failure"] == "violation_taken_down"
+        await admin.take_down(
+            "knowledge", knowledge_listing, "严重虚假宣传", OPS, violation=True
+        )
+        [t] = [
+            x
+            for x in await svc.my_trades(BUYER, "buyer")
+            if x["trade_id"] == trade["trade_id"]
+        ]
+        assert (
+            t["listing_state"] == "revoked" and t["failure"] == "violation_taken_down"
+        )
 
     await world.run(buy_and_violate)

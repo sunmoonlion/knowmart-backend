@@ -180,3 +180,27 @@ async def test_the_manual_sweep_also_checks_offers(market) -> None:
         )
         assert swept.status_code == 200, swept.text
         assert swept.json()["offers"]["checked"] == 1
+
+
+@pytest.mark.parametrize("violation", [None, True])
+async def test_takedown_default_and_explicit_violation_reach_existing_admin_service(
+    market, violation
+):
+    calls = []
+
+    class Admin:
+        async def take_down(self, kind, target_id, note, reviewer, *, violation=False):
+            calls.append((kind, target_id, note, reviewer, violation))
+
+    app.dependency_overrides[market_routes._admin] = lambda: Admin()
+    body = {"kind": "knowledge", "target_id": "synthetic", "note": "test reason"}
+    if violation is not None:
+        body["violation"] = violation
+    async with client("operator", "sunmoonai_knowmart_admin_sid") as c:
+        response = await c.post(
+            "/api/admin/v1/knowmart/market/takedown",
+            json=body,
+            headers={"Origin": "http://localhost:5173", "X-CSRF-Token": CSRF},
+        )
+    assert response.status_code == 204, response.text
+    assert len(calls) == 1 and calls[0][-1] is bool(violation)

@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,7 +24,11 @@ from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
 CATEGORY_CODES: tuple[str, ...] = tuple(
     c.code for c in CATEGORIES if c.code != DEFAULT_CATEGORY
 )
-CategoryCode = Literal[CATEGORY_CODES]  # type: ignore[valid-type]
+if TYPE_CHECKING:
+    CategoryCode = str
+else:
+    # Pydantic builds the enum from the single authoritative category catalog.
+    CategoryCode = Literal[CATEGORY_CODES]
 
 # 所绑数据不行的原因，先说最要紧的（前端照代码写成人话）
 HOLD_REASONS: tuple[str, ...] = (

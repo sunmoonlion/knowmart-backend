@@ -25,11 +25,11 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
-from sqlalchemy import text
 from app.infrastructure.models.base import Base, TimestampMixin
 
 

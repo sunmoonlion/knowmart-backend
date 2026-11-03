@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import re
+import unicodedata
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -277,10 +278,8 @@ class ShopDecision(Strict):
     note: str = Field(min_length=1, max_length=2000)
 
 
-import unicodedata
-import re
-
 _ZERO_WIDTH_AND_WHITESPACE = re.compile(r"[\s​-‏﻿⁠]+", re.UNICODE)
+
 
 def shop_name_words(name: str) -> list[str]:
     """店名里出现的禁止词；有就不收。经 NFKC 规范化并剔除空白与零宽字符匹配。"""

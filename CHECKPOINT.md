@@ -14,3 +14,8 @@
 新增内部expert-directory/v2，完整公开scope/能力/确切版本摘要/费用；不输出方法源、内部绑定、私有数据。旧目录默认响应不变；超容量明确失败不截断宣称完整。详情复用既有labelled结构显示公开能力、条件与交付，v3亦按问题确认数据。
 
 提供方schema生成锁与消费者比对通过；目录/详情20 passed，变更文件Ruff通过。全仓Ruff另有11个基线问题、Pyright有4个非本次文件错误（market.py、delivery.py、repositories/knowbots.py、market_routes.py），未混修；变更文件类型检查另列。未发布、未添加真实专家资产。
+
+## 2026-11-03 同版候选门禁清理
+
+基线455f3da。清理已发布基线静态检查问题：动态类目Literal保留单一来源和原Schema；SQL更新返回值明确CursorResult类型；价格序列化明确Decimal；修正导入/格式。下架路由原来读取DTO不存在的violation会直接异常，补默认false的严格布尔字段，沿用现有运营授权和service行为，不执行任何真实下架。
+全仓Ruff/Pyright通过；目录、详情、原交付Schema、管理路由33项通过；隔离PG商城/店铺/版本仓储40项通过。原delivery契约逐字不变，既有UI不传字段时维持普通下架语义；新增接口测试覆盖默认/显式字段。没有数据库迁移或外部模型调用。
