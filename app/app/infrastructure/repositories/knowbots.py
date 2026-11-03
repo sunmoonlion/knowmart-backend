@@ -411,9 +411,22 @@ class SqlKnowbotRepository:
         await self.session.flush()
 
     async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None:
-        await self.session.execute(
-            update(Knowbot).where(Knowbot.id == knowbot_id).values(category=category)
-        )
+        row = (
+            await self.session.execute(
+                select(Knowbot).where(Knowbot.id == knowbot_id).with_for_update()
+            )
+        ).scalar_one()
+        if row.category == category:
+            return
+        row.category = category
+        # 类目属于公开审核的对象。换类目不能继承上一类目的公开或待审状态。
+        row.visibility = "private"
+        if row.listing_status != "taken_down":
+            row.listing_status = "self"
+            row.listing_review_note = None
+            row.listing_reviewed_by = None
+            row.listing_reviewed_at = None
+        await self.session.flush()
 
     async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
         rows = (

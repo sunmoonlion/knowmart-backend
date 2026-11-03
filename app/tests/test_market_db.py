@@ -44,7 +44,7 @@ from app.domain.market import (
 )
 from app.infrastructure.repositories.knowbots import SqlKnowbotRepository
 from app.infrastructure.repositories.market import SqlMarketRepository
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import AllShareable, manifest
 from tests.test_knowbot_repository_db import OWNER, db, deliver  # noqa: F401
 
 SELLER = OWNER
@@ -390,6 +390,145 @@ async def test_knowlab_asks_public_on_delivery_only_qualified_go_to_review(
         assert [e["knowbot_id"] for e in (await admin.queue())["experts"]] == [str(bot)]
 
     await world.run(others)
+
+
+@pytest.mark.parametrize(
+    ("category", "status"),
+    [
+        ("tools.office", "public"),
+        ("tools.calculator", "pending"),
+        ("finance.securities_advisory", "not_qualified"),
+    ],
+)
+async def test_new_delivery_rechecks_category_before_reusing_public_listing(
+    world: World,
+    db,  # noqa: F811
+    category: str,
+    status: str,
+) -> None:
+    bot = (await deliver(db, "category-v1", manifest(), public=True)).knowbot_id
+    await approved_publisher(world)
+
+    async def publish(svc: MarketService, admin: MarketAdmin):
+        await svc.set_expert_listing(
+            SELLER,
+            str(bot),
+            ExpertListingIn(visibility="public", category="tools.office"),
+        )
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+
+    await world.run(publish)
+    async with db() as session:
+        svc = KnowbotService(SqlKnowbotRepository(session), bindings=AllShareable())
+        await svc.deliver(
+            delivery_id="category-v2",
+            owner_subject=SELLER,
+            knowbot_ref="lab-bot-1",
+            manifest=manifest("2"),
+            request_public=True,
+            category=category,
+        )
+
+    async def check(svc: MarketService, admin: MarketAdmin):
+        assert await svc.ask_public_on_delivery(SELLER, str(bot)) == status
+        row = await svc.repo.get_knowbot(str(bot))
+        assert row["visibility"] == ("public" if status == "public" else "private")
+        assert row["listing_status"] == (
+            "self" if status == "not_qualified" else status
+        )
+
+    await world.run(check)
+    async with db() as session:
+        svc = KnowbotService(SqlKnowbotRepository(session), public_market=True)
+        # 保留作者使用和不可变版本；其他用户必须等新类目审核完成。
+        assert (
+            await svc.summon(
+                owner_subject=SELLER,
+                knowbot_id=str(bot),
+                version="2",
+                runtime="knowbench",
+            )
+        ).version.manifest == manifest("2")
+        if status == "public":
+            await svc.summon(
+                owner_subject=BUYER,
+                knowbot_id=str(bot),
+                version="2",
+                runtime="knowbench",
+            )
+        else:
+            with pytest.raises(NotFoundError):
+                await svc.summon(
+                    owner_subject=BUYER,
+                    knowbot_id=str(bot),
+                    version="2",
+                    runtime="knowbench",
+                )
+
+
+@pytest.mark.parametrize("old_status", ["pending", "public", "taken_down"])
+async def test_public_delivery_rejects_stale_qualification_without_reviving_takedown(
+    world: World,
+    db,  # noqa: F811
+    old_status: str,
+) -> None:
+    bot = (await deliver(db, "stale-listing", manifest(), public=True)).knowbot_id
+    publisher = await approved_publisher(world)
+    # 复现旧版已留下的错误状态：条目声称公开，但当前类目没有许可。
+    async with db() as session:
+        await session.execute(
+            text(
+                "UPDATE knowbot SET category='finance.securities_advisory', "
+                "publisher_id=:p, listing_status=:s, visibility=:v WHERE id=:i"
+            ),
+            {
+                "p": publisher,
+                "s": old_status,
+                "v": "public" if old_status == "public" else "private",
+                "i": bot,
+            },
+        )
+        await session.commit()
+
+    async def check(svc: MarketService, admin: MarketAdmin):
+        expected = "taken_down" if old_status == "taken_down" else "not_qualified"
+        assert await svc.ask_public_on_delivery(SELLER, str(bot)) == expected
+        row = await svc.repo.get_knowbot(str(bot))
+        assert row["visibility"] == "private"
+        assert row["listing_status"] == (
+            "taken_down" if old_status == "taken_down" else "self"
+        )
+
+    await world.run(check)
+
+
+async def test_owner_changing_public_category_requires_new_listing_review(
+    world: World,
+    db,  # noqa: F811
+) -> None:
+    bot = (await deliver(db, "owner-category", manifest(), public=True)).knowbot_id
+    await approved_publisher(world)
+
+    async def change(svc: MarketService, admin: MarketAdmin):
+        await svc.set_expert_listing(
+            SELLER,
+            str(bot),
+            ExpertListingIn(visibility="public", category="tools.office"),
+        )
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+        row = await svc.set_expert_listing(
+            SELLER,
+            str(bot),
+            ExpertListingIn(visibility="public", category="tools.calculator"),
+        )
+        assert (row["listing_status"], row["visibility"]) == ("pending", "private")
+        await admin.decide_expert(str(bot), ReviewDecision(approve=True), OPS)
+
+    await world.run(change)
+    async with db() as session:
+        await KnowbotService(SqlKnowbotRepository(session), public_market=True).summon(
+            owner_subject=BUYER, knowbot_id=str(bot), version="1", runtime="knowbench"
+        )
 
 
 # ---------- 知识条目、需求与响应 ----------

@@ -578,9 +578,16 @@ class MarketService:
                 "category": category,
                 "publisher_id": publisher["id"],
                 "listing_status": "public"
-                if bot["visibility"] == "public"
+                if bot["visibility"] == "public" and category == bot["category"]
                 else "pending",
             }
+            if category != bot["category"]:
+                changes.update(
+                    visibility="private",
+                    listing_review_note=None,
+                    listing_reviewed_by=None,
+                    listing_reviewed_at=None,
+                )
         async with self.repo.transaction():
             await self.repo.update_knowbot(bot["id"], **changes)
         found = await self.repo.get_knowbot(knowbot_id)
@@ -592,25 +599,39 @@ class MarketService:
 
         那边运营审核定了公开：发布主体与类目资质都过的，这一位进上架审核；不过的留
         自用、不报错（资质在这里审，卖家补齐后可在「我发布的」再申请）。已在审、
-        已公开、被平台下架的不动。回上架状态；没进上架审核的照实回为什么：还没选
+        已公开仍重查当前资质；被平台下架的不动。回上架状态；没进上架审核的照实回为什么：还没选
         类目回 category_needed，资质没过回 not_qualified（只在回包里，不存；Fable
         评审 P2-1），小店停着回 shop_suspended。
         """
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] != subject:
             raise _missing("knowbot")
-        if bot["listing_status"] in ("pending", "public", "taken_down"):
-            return str(bot["listing_status"])
+        if bot["listing_status"] == "taken_down":
+            return "taken_down"
         if shop_closed(await self.ensure_shop(subject)):
             return "shop_suspended"
         try:
             check_category(bot["category"])
         except BadRequestError:
-            return "category_needed"
-        try:
-            publisher = await self._qualified(subject, bot["category"])
-        except BadRequestError:
-            return "not_qualified"
+            reason = "category_needed"
+        else:
+            reason = None
+        publisher = None
+        if reason is None:
+            try:
+                publisher = await self._qualified(subject, bot["category"])
+            except BadRequestError:
+                reason = "not_qualified"
+        if reason is not None:
+            if bot["listing_status"] in ("pending", "public"):
+                async with self.repo.transaction():
+                    await self.repo.update_knowbot(
+                        bot["id"], visibility="private", listing_status="self"
+                    )
+            return reason
+        if bot["listing_status"] in ("pending", "public"):
+            return str(bot["listing_status"])
+        assert publisher is not None
         async with self.repo.transaction():
             await self.repo.update_knowbot(
                 bot["id"], publisher_id=publisher["id"], listing_status="pending"

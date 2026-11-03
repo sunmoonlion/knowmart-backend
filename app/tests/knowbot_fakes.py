@@ -284,7 +284,12 @@ class MemoryKnowbots:
         )
 
     async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None:
-        self.bots[knowbot_id]["category"] = category
+        bot = self.bots[knowbot_id]
+        if bot.get("category", "uncategorized") == category:
+            return
+        bot["category"] = category
+        bot["visibility"] = "private"
+        # 此替身只投影 KnowbotRecord；完整上架状态的变更由真实仓储测试覆盖。
 
     async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
         return [

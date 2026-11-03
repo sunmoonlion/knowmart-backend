@@ -400,7 +400,9 @@ async def test_a_suspended_shop_stops_new_public_dealings_and_keeps_old_trades(
         with pytest.raises(ConcurrencyConflictError) as refused:
             await admin.decide_listing(pending, ReviewDecision(approve=True), OPS)
         assert refused.value.code == "shop_suspended"
-        assert await svc.ask_public_on_delivery(SELLER, bot) == "public"
+        # 交付回执须反映当前停店门禁，不能仅因条目曾公开就报可公开；不撤历史审核。
+        assert await svc.ask_public_on_delivery(SELLER, bot) == "shop_suspended"
+        assert (await svc.repo.get_knowbot(bot))["listing_status"] == "public"
         page = await svc.shop(BUYER, str((await svc.ensure_shop(SELLER))["id"]))
         assert page["shop"]["status"] == "suspended" and page["knowledge"] == []
         mine = await svc.my_shop(SELLER)

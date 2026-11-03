@@ -114,7 +114,9 @@ class KnowbotRepository(Protocol):
         """收回这一版的公开：只撤掉 public_allowed，保留自用。"""
         ...
 
-    async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None: ...
+    async def set_category(self, knowbot_id: uuid.UUID, category: str) -> None:
+        """改变类目时退回自用待重新申请；保留平台下架决定。同类目不改审核状态。"""
+        ...
 
     async def watched_versions(self) -> Sequence[tuple[str, KnowbotVersionRecord]]:
         """后台要核的（主人, 版本）：审成公开、还在售或待处理、清单里有绑定的。"""
