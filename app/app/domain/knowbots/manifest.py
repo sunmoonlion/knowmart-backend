@@ -135,9 +135,23 @@ class KnowbotManifestV3(ManifestEnvelope[Literal["knowbot-manifest/v3"]]):
         if pack.get("runtime_contract") not in (
             "knowbench/dynamic-methods/v1",
             "knowbench/dynamic-methods/v2",
+            "knowbench/dynamic-methods/v3",
         ):
             raise ValueError("unsupported dynamic runtime contract")
-        if pack["runtime_contract"].endswith("/v2"):
+        if pack["runtime_contract"].endswith("/v3"):
+            from app.domain.knowbots.directory import PublicCapability
+
+            capabilities = pack.get("public_capabilities")
+            if not isinstance(capabilities, list) or not 1 <= len(capabilities) <= 30:
+                raise ValueError("capability catalog needs public capabilities")
+            parsed = [PublicCapability.model_validate(cap) for cap in capabilities]
+            if len({cap.id for cap in parsed}) != len(parsed):
+                raise ValueError("public capability ids must be unique")
+            if not isinstance(pack.get("method_sources"), dict):
+                raise ValueError("capability catalog requires method_sources")
+            if pack.get("method_compiler") != "knowlab/workdraft-compiler/v2":
+                raise ValueError("unsupported capability compiler")
+        elif pack["runtime_contract"].endswith("/v2"):
             if (
                 not isinstance(pack.get("method_sources"), dict)
                 or not pack["method_sources"]

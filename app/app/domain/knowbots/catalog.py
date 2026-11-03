@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.domain.knowbots.directory import PublicCapability
+
 
 @dataclass(frozen=True)
 class Category:
@@ -94,7 +96,7 @@ def _text(value: object, limit: int = 2000) -> str:
 
 def asks_by_question(manifest: dict[str, Any]) -> bool:
     """清单 v2：每件委托由第 0 步按你的问题提出要哪些数据、你确认（decisions ⑭）。"""
-    return manifest.get("schema") == "knowbot-manifest/v2"
+    return manifest.get("schema") in {"knowbot-manifest/v2", "knowbot-manifest/v3"}
 
 
 def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
@@ -106,6 +108,23 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
         text = next((_text(answers.get(k)) for k in keys if _text(answers.get(k))), "")
         if text:
             can_do.append({"label": label, "text": text})
+    # The same author declarations used for matching are visible to people.
+    # Reuse the existing labelled sections contract; never expose private bindings.
+    public_deliveries: list[dict[str, Any]] = []
+    for raw in pack.get("public_capabilities") or []:
+        capability = PublicCapability.model_validate(raw)
+        can_do.append({"label": "可完成的任务", "text": capability.statement})
+        for label, lines in (
+            ("适用条件", capability.conditions),
+            ("不包含", capability.exclusions),
+            ("交付成果", capability.delivers),
+        ):
+            if lines:
+                can_do.append({"label": label, "text": "；".join(lines)})
+        for deliverable in capability.delivers:
+            row = {"step": deliverable, "file": None}
+            if row not in public_deliveries:
+                public_deliveries.append(row)
     scope = _dict(pack.get("scope"))
     workflow = [s for s in pack.get("workflow") or [] if isinstance(s, dict)]
     sections: dict[str, Any] = {
@@ -123,7 +142,8 @@ def expert_sections(manifest: dict[str, Any], *, owner: bool) -> dict[str, Any]:
                 [b for b in manifest.get("bindings") or [] if isinstance(b, dict)]
             ),
         },
-        "delivers": [
+        "delivers": public_deliveries
+        or [
             {
                 "step": _text(s.get("title"), 200),
                 "file": _text(s.get("output_file"), 300) or None,

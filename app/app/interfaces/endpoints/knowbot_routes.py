@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,7 @@ from app.application.services.market import MarketService
 from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_service
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.knowbots.delivery import KnowbotDeliveryV1
+from app.domain.knowbots.directory import public_directory
 from app.domain.market import DemandIn
 from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
@@ -223,15 +224,27 @@ async def runtime_catalog(
     catalog: Annotated[ExpertCatalog, Depends(catalog_for_request)],
     market: Annotated[MarketService, Depends(market_for_request)],
     owner_subject: Annotated[str, Path(min_length=1, max_length=512)],
+    directory_version: Annotated[int, Query(ge=1, le=2)] = 1,
 ) -> JSONResponse:
     """运行方替用户「找专家」（请专家方案设计第 4.9 节）：这个用户请得动、
     运行方是调用方的
     专家，各最新一版的公开信息、价格、免不免费请；不排序、不加权（按名称）。"""
-    entries = await catalog.runtime_catalog(owner_subject, caller.caller)
+    entries = (
+        await catalog.runtime_catalog(
+            owner_subject, caller.caller, capability_declarations=True
+        )
+        if directory_version == 2
+        else await catalog.runtime_catalog(owner_subject, caller.caller)
+    )
+    priced = await market.expert_terms(owner_subject, entries)
+    if directory_version == 2:
+        return JSONResponse(
+            content=public_directory(priced).model_dump(mode="json"), headers=NO_STORE
+        )
     return JSONResponse(
         content={
             "contract_version": CONTRACT_VERSION,
-            "experts": await market.expert_terms(owner_subject, entries),
+            "experts": priced,
         },
         headers=NO_STORE,
     )

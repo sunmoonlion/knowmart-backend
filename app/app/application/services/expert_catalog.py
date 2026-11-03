@@ -231,7 +231,7 @@ class ExpertCatalog:
         }
 
     async def runtime_catalog(
-        self, owner_subject: str, runtime: str
+        self, owner_subject: str, runtime: str, *, capability_declarations: bool = False
     ) -> list[dict[str, Any]]:
         """运行方替用户「找专家」时看的（请专家方案设计第 4.9 节第 2 条）：
         这个用户请得动、
@@ -263,10 +263,28 @@ class ExpertCatalog:
                     "version": latest.version,
                     "category": bot.category,
                     "scope": {
-                        k: str(scope.get(k) or "")[:2000]
+                        k: str(scope.get(k) or "")
+                        if capability_declarations
+                        else str(scope.get(k) or "")[:2000]
                         for k in ("does", "does_not", "elsewhere")
                     },
                     "owned": bot.owner_subject == owner_subject,
+                    **(
+                        {
+                            "digest": latest.digest,
+                            "runtime_contract": (pack or {}).get(
+                                "runtime_contract", "knowbench/fixed/v1"
+                            ),
+                            "public_capabilities": (pack or {}).get(
+                                "public_capabilities", []
+                            ),
+                            "declaration": "capabilities/v1"
+                            if (pack or {}).get("public_capabilities")
+                            else "scope/v1",
+                        }
+                        if capability_declarations
+                        else {}
+                    ),
                 }
             )
         return sorted(out, key=lambda e: (e["name"], e["knowbot_id"]))
