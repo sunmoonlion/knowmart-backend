@@ -502,6 +502,37 @@ async def test_listings_are_checked_in_the_background(world: ShopWorld) -> None:
     assert await world.run(check) == {"checked": 0, "delisted": 0, "skipped": None}
 
 
+async def test_a_refused_batch_is_logged_and_its_listings_stay_up(
+    world: ShopWorld, caplog
+) -> None:
+    """某一批被 knowbase 拒了（不是连不上）：这几份这一轮不算数、不下架，下一轮再核；
+    但要记一条告警，不能悄悄跳过（opus-qwen 第 15 条）。"""
+    from app.application.errors.exceptions import BadRequestError
+
+    await approved_publisher(world)
+    await listed_knowledge(world, items=[{"item_id": "d1"}])
+    world.vault.gone.add("d1")
+    original = world.vault.offer_states
+
+    async def refuse(items):
+        raise BadRequestError("bad batch", code="items_invalid")
+
+    world.vault.offer_states = refuse
+
+    async def check(svc: MarketService, admin: MarketAdmin) -> dict[str, Any]:
+        return await admin.check_offers()
+
+    with caplog.at_level("WARNING"):
+        assert await world.run(check) == {"checked": 1, "delisted": 0, "skipped": None}
+    assert any(
+        "offer_check_batch_refused" in r.getMessage()
+        and "items_invalid" in r.getMessage()
+        for r in caplog.records
+    )
+    world.vault.offer_states = original
+    assert (await world.run(check))["delisted"] == 1
+
+
 async def test_without_knowbase_the_background_check_is_skipped(db) -> None:  # noqa: F811
     async with db() as session:
         admin = MarketAdmin(SqlMarketRepository(session), now=lambda: NOW)

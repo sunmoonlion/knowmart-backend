@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
@@ -69,6 +70,7 @@ from app.domain.market import (
 
 PAGE_SIZE = 24
 # 后台核资料一次问 knowbase 几份（knowbase 那头一次最多收 200）
+log = logging.getLogger(__name__)
 OFFER_BATCH = 200
 # 小店详情页上列多少条评价；平均分按最近这么多条算
 SHOP_REVIEWS = 20
@@ -1650,6 +1652,10 @@ class MarketAdmin:
             except AppException as exc:
                 if exc.code == "knowbase_unavailable":
                     return {"checked": 0, "delisted": 0, "skipped": exc.code}
+                # 这一批这一轮不算数（不下架），下一轮再核；记下来，不悄悄跳过
+                log.warning(
+                    "offer_check_batch_refused code=%s items=%d", exc.code, len(batch)
+                )
                 continue
         delisted = 0
         for listing in listings:
