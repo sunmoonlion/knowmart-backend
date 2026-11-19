@@ -27,6 +27,8 @@ from app.infrastructure.models.knowbots import (
 from app.infrastructure.models.market import (
     Demand,
     DemandResponse,
+    FormalAcquisition,
+    FormalListing,
     HouseRules,
     KnowledgeListing,
     MarketMessage,
@@ -108,6 +110,65 @@ class SqlMarketRepository:
             raise
         finally:
             self._depth -= 1
+
+    async def pending_formal_listings(self, offset, limit):
+        stmt = (
+            select(FormalListing)
+            .where(FormalListing.status == "pending")
+            .order_by(FormalListing.id)
+        )
+        return [
+            _row(row)
+            for row in await self.session.scalars(stmt.offset(offset).limit(limit))
+        ]
+
+    async def submit_formal_listing(self, fields):
+        await self.session.execute(
+            pg_insert(FormalListing)
+            .values(**fields)
+            .on_conflict_do_nothing(
+                index_elements=["owner_subject", "method_id", "version"]
+            )
+        )
+        row = (
+            await self.session.execute(
+                select(FormalListing)
+                .where(
+                    FormalListing.owner_subject == fields["owner_subject"],
+                    FormalListing.method_id == fields["method_id"],
+                    FormalListing.version == fields["version"],
+                )
+                .with_for_update()
+            )
+        ).scalar_one()
+        return _row(row)
+
+    async def formal_listing(self, listing_id):
+        row = await self.session.scalar(
+            select(FormalListing)
+            .where(FormalListing.id == listing_id)
+            .with_for_update()
+        )
+        return _row(row) if row else None
+
+    async def update_formal_listing(self, listing_id, **changes):
+        await self.session.execute(
+            update(FormalListing)
+            .where(FormalListing.id == listing_id)
+            .values(**changes)
+        )
+
+    async def acquire_formal_listing(self, listing_id, buyer):
+        await self.session.execute(
+            pg_insert(FormalAcquisition)
+            .values(listing_id=listing_id, buyer_subject=buyer)
+            .on_conflict_do_nothing()
+        )
+
+    async def has_formal_acquisition(self, listing_id, buyer):
+        return (
+            await self.session.get(FormalAcquisition, (listing_id, buyer)) is not None
+        )
 
     # ---------- 发布主体与资质 ----------
     async def publisher_of(self, subject: str) -> dict[str, Any] | None:
@@ -781,11 +842,13 @@ class SqlMarketRepository:
     async def has_bought_expert(self, buyer: str, listing_ref: str) -> bool:
         row = (
             await self.session.execute(
-                select(Trade.id).where(
+                select(Trade.id)
+                .where(
                     Trade.buyer_subject == buyer,
                     Trade.listing_ref == listing_ref,
                     Trade.kind == "expert",
-                ).limit(1)
+                )
+                .limit(1)
             )
         ).scalar_one_or_none()
         return row is not None

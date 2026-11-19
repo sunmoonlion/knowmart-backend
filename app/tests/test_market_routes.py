@@ -204,3 +204,59 @@ async def test_takedown_default_and_explicit_violation_reach_existing_admin_serv
         )
     assert response.status_code == 204, response.text
     assert len(calls) == 1 and calls[0][-1] is bool(violation)
+
+
+async def test_formal_acquisition_uses_only_web_subject_and_operator_can_review(market):
+    from uuid import UUID
+
+    listing = UUID("ac013a6a-a246-49e3-b422-042ba0a71152")
+
+    async def acquire(subject, listing_id):
+        assert subject == "user-123" and listing_id == listing
+        return {"listing_id": str(listing), "status": "acquired"}
+
+    async def review(subject, listing_id, decision):
+        assert subject == "user-123" and listing_id == listing and decision.approve
+        return {"listing_id": str(listing), "status": "listed"}
+
+    market.acquire_formal = acquire
+    market.review_formal = review
+    path = f"{BASE}/formal-methods/listings/{listing}/acquisitions"
+    admin = f"/api/admin/v1/knowmart/market/formal-methods/listings/{listing}/review"
+    async with client() as c:
+        resp = await c.post(path, headers={"Origin": ORIGIN, "X-CSRF-Token": CSRF})
+        assert resp.status_code == 200 and resp.json()["status"] == "acquired"
+        assert (await c.post(admin, json={"approve": True})).status_code in (401, 403)
+    async with client("operator", "sunmoonai_knowmart_admin_sid") as c:
+        resp = await c.post(
+            admin,
+            json={"approve": True},
+            headers={"Origin": "http://localhost:5173", "X-CSRF-Token": CSRF},
+        )
+        assert resp.status_code == 200
+
+
+def test_runtime_file_paths_versions_and_notices_are_verbatim():
+    from app.infrastructure.external.formal_method_delivery import DeliveredSkill
+
+    reference = {
+        "method_id": "ac013a6a-a246-49e3-b422-042ba0a71152",
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+    }
+    packet = {
+        "method": reference,
+        "version": "v1 ",
+        "manifest_digest": reference["digest"],
+        "terms": {"origin": "test/package", "notices": ["  作者声明\n"]},
+        "files": [
+            {
+                "path": "assets/notice ",
+                "size": 0,
+                "sha256": "2" * 64,
+                "media_type": "text/plain",
+                "data_base64": "",
+            }
+        ],
+    }
+    assert DeliveredSkill.model_validate(packet).model_dump(mode="json") == packet

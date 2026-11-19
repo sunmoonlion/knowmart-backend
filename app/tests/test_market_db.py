@@ -28,6 +28,7 @@ from app.domain.market import (
     BuyIn,
     DemandIn,
     ExpertListingIn,
+    FormalListingIn,
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
@@ -1358,3 +1359,88 @@ def test_id_numbers_are_checked() -> None:
         PublisherIn(
             kind="organization", name="某公司", credit_code="91110000000000000X"
         )
+
+
+async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
+    reference = {
+        "method_id": str(uuid.uuid4()),
+        "version": 1,
+        "digest": "sha256:" + "1" * 64,
+    }
+    body = FormalListingIn(reference=reference, category="tools.office")
+
+    class Runtime:
+        allowed = True
+
+        async def check(self, owner, ref, skill):
+            assert owner == SELLER and ref == reference
+            if not self.allowed:
+                raise NotFoundError("Expired dependency license")
+            return {
+                "title": "Synthetic Skill",
+                "purpose": "Verify delivery",
+                "skill_dependencies": [],
+                "delivery_digest": "sha256:" + "2" * 64,
+                "package": {"method": skill, "files": ["runtime only"]},
+            }
+
+    runtime = Runtime()
+
+    async def call(method, *args, **kwargs):
+        async with world.db() as session:
+            service = world.svc(session)
+            service.public_market = True
+            service.formal_delivery = runtime
+            return await getattr(service, method)(*args, **kwargs)
+
+    with pytest.raises(BadRequestError):
+        await call("submit_formal", SELLER, body)
+    await approved_publisher(world)
+    with pytest.raises(BadRequestError):
+        await call(
+            "submit_formal",
+            SELLER,
+            body.model_copy(update={"category": "finance.securities_advisory"}),
+        )
+    pending = await call("submit_formal", SELLER, body)
+    listing = uuid.UUID(pending["listing_id"])
+    assert await call("submit_formal", SELLER, body) == pending
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing)
+    await call("review_formal", OPS, listing, ReviewDecision(approve=True))
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
+    first, second = await asyncio.gather(
+        *(call("acquire_formal", BUYER, listing) for _ in range(2))
+    )
+    assert (
+        first == second and first["reference"] == reference and "package" not in first
+    )
+    async with world.db() as session:
+        assert (
+            await session.scalar(text("SELECT count(*) FROM formal_method_acquisition"))
+            == 1
+        )
+    assert "package" in await call(
+        "acquire_formal", BUYER, listing, runtime=True, skill=reference
+    )
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", OTHER, listing, runtime=True)
+    runtime.allowed = False
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
+    runtime.allowed = True
+    await call("withdraw_formal", SELLER, listing)
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", OTHER, listing)
+    assert "package" in await call(
+        "acquire_formal", BUYER, listing, runtime=True, skill=reference
+    )
+    await _edit_publisher(world)
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing)
+    with pytest.raises(NotFoundError):
+        await call("withdraw_formal", BUYER, listing)
+    await call("withdraw_formal", SELLER, listing)
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing, runtime=True)

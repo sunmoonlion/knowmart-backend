@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from typing import Annotated, Any, Literal
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Header, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -20,6 +21,7 @@ from app.domain.market import (
     BuyIn,
     DemandIn,
     ExpertListingIn,
+    FormalListingIn,
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
@@ -560,3 +562,30 @@ async def trades(admin: Admin, page: Page = 1) -> JSONResponse:
 async def sweep(admin: Admin) -> JSONResponse:
     """手动跑一次资质到期与照片清理、核一遍条目里的资料（定时任务也跑）。"""
     return ok({**await admin.sweep(), "offers": await admin.check_offers()})
+
+
+@web_router.post("/formal-methods/listings")
+async def submit_formal(principal: User, body: FormalListingIn, svc: Service):
+    return ok(await svc.submit_formal(principal.subject, body))
+
+
+@web_router.delete("/formal-methods/listings/{listing_id}")
+async def withdraw_formal(principal: User, listing_id: UUID, svc: Service):
+    return ok(await svc.withdraw_formal(principal.subject, listing_id))
+
+
+@admin_router.get("/formal-methods/listings")
+async def pending_formal(_: Operator, svc: Admin, page: Page = 1):
+    return ok(await svc.pending_formal(page))
+
+
+@admin_router.post("/formal-methods/listings/{listing_id}/review")
+async def review_formal(
+    principal: Operator, listing_id: UUID, body: ReviewDecision, svc: Service
+):
+    return ok(await svc.review_formal(principal.subject, listing_id, body))
+
+
+@web_router.post("/formal-methods/listings/{listing_id}/acquisitions")
+async def acquire_formal(principal: User, listing_id: UUID, svc: Service):
+    return ok(await svc.acquire_formal(principal.subject, listing_id))

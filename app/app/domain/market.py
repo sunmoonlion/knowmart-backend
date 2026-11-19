@@ -16,6 +16,7 @@ import hashlib
 import hmac
 import re
 import unicodedata
+import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -310,3 +311,20 @@ def demand_open(status: str, deadline: date, today: date) -> bool:
 DEFAULT_RULES = (Path(__file__).parent / "house_rules_v1.md").read_text(
     encoding="utf-8"
 )
+
+
+class FormalReference(Strict):
+    method_id: uuid.UUID
+    version: int = Field(strict=True, ge=1)
+    digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+
+class FormalListingIn(Strict):
+    reference: FormalReference
+    category: str = Field(min_length=1, max_length=64)
+
+
+class FormalDeliveryIn(Strict):
+    model_config = ConfigDict(str_strip_whitespace=False)
+    buyer_subject: str = Field(min_length=1, max_length=512)
+    skill: FormalReference | None = None

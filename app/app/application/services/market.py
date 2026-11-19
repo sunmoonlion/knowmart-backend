@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
@@ -24,9 +25,11 @@ from decimal import Decimal
 
 from app.application.errors.exceptions import (
     AppException,
+    BadGatewayError,
     BadRequestError,
     ConcurrencyConflictError,
     NotFoundError,
+    ServiceUnavailableError,
 )
 from app.application.ports.knowbots import KnowbotRepository
 from app.application.ports.market import KnowledgeVault, MarketRepository, Row
@@ -172,6 +175,14 @@ async def take_off(repo: MarketRepository, listing_id: str, reason: str) -> bool
     return True
 
 
+def formal_ref(row):
+    return {
+        "method_id": str(row["method_id"]),
+        "version": row["version"],
+        "digest": row["digest"],
+    }
+
+
 class MarketService:
     def __init__(
         self,
@@ -179,6 +190,7 @@ class MarketService:
         knowbots: KnowbotRepository,
         vault: KnowledgeVault | None,
         *,
+        formal_delivery=None,
         id_hash_key: str = "",
         public_market: bool = False,
         platform_credit_code: str = "",
@@ -187,6 +199,7 @@ class MarketService:
         self.repo = repo
         self.knowbots = knowbots
         self.vault = vault
+        self.formal_delivery = formal_delivery
         self.id_hash_key = id_hash_key
         # 平台开了公开（PUBLIC_MARKET_ENABLED）才有别人看得到的专家
         self.public_market = public_market
@@ -548,6 +561,136 @@ class MarketService:
                 "This category needs an approved license", code="license_required"
             )
         return publisher
+
+    async def _formal_version(self, owner, reference, *, expected=None, skill=None):
+        if self.formal_delivery is None:
+            raise ServiceUnavailableError("Formal method delivery is unavailable")
+        body = await self.formal_delivery.check(owner, reference, skill)
+        lock = body.get("delivery_digest")
+        if (
+            not isinstance(lock, str)
+            or not re.fullmatch(r"sha256:[a-f0-9]{64}", lock)
+            or expected is not None
+            and lock != expected
+        ):
+            raise BadGatewayError("Formal dependency lock differs")
+        return body
+
+    async def submit_formal(self, subject, body):
+        if not self.public_market:
+            raise _missing("formal_listing")
+        check_category(body.category)
+        async with self.repo.transaction():
+            await self._open_shop(subject)
+            publisher = await self._qualified(subject, body.category)
+            ref = body.reference.model_dump(mode="json")
+            ready = await self._formal_version(subject, ref)
+            fields = dict(
+                id=uuid.uuid4(),
+                owner_subject=subject,
+                method_id=body.reference.method_id,
+                version=ref["version"],
+                digest=ref["digest"],
+                delivery_digest=ready["delivery_digest"],
+                title=ready["title"],
+                purpose=ready["purpose"],
+                category=body.category,
+                publisher_id=publisher["id"],
+                status="pending",
+            )
+            row = await self.repo.submit_formal_listing(fields)
+            if any(
+                row[k] != fields[k]
+                for k in ("digest", "delivery_digest", "category", "publisher_id")
+            ):
+                raise _conflict(
+                    "Listing version already has another review scope",
+                    "formal_listing_conflict",
+                )
+            return {
+                "listing_id": str(row["id"]),
+                "status": row["status"],
+                "reference": ref,
+            }
+
+    async def _formal_qualified(self, row):
+        if (
+            not self.public_market
+            or shop_closed(await self.repo.shop_of(row["owner_subject"]))
+            or not await still_qualified(
+                self.repo, row["publisher_id"], row["category"], self.now().date()
+            )
+        ):
+            raise _missing("formal_listing")
+
+    async def review_formal(self, operator, listing_id, decision):
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id)
+            if not row or row["status"] not in (
+                ("pending",) if decision.approve else ("pending", "listed", "withdrawn")
+            ):
+                raise _missing("formal_listing")
+            if decision.approve:
+                await self._formal_qualified(row)
+                await self._formal_version(
+                    row["owner_subject"],
+                    formal_ref(row),
+                    expected=row["delivery_digest"],
+                )
+            state = "listed" if decision.approve else "rejected"
+            await self.repo.update_formal_listing(
+                listing_id,
+                status=state,
+                reviewed_by=operator,
+                reviewed_at=self.now(),
+                review_note=decision.note,
+            )
+            return {"listing_id": str(listing_id), "status": state}
+
+    async def withdraw_formal(self, subject, listing_id):
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id)
+            if not row or row["owner_subject"] != subject:
+                raise _missing("formal_listing")
+            if row["status"] == "rejected":
+                raise _conflict(
+                    "Listing is restricted by the operator", "formal_listing_rejected"
+                )
+            await self.repo.update_formal_listing(listing_id, status="withdrawn")
+            return {"listing_id": str(listing_id), "status": "withdrawn"}
+
+    async def acquire_formal(self, subject, listing_id, *, runtime=False, skill=None):
+        if skill is not None and not runtime:
+            raise _missing("formal_acquisition")
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id)
+            allowed_states = ("listed", "withdrawn") if runtime else ("listed",)
+            if not row or row["status"] not in allowed_states:
+                raise _missing("formal_listing")
+            if runtime and not await self.repo.has_formal_acquisition(
+                listing_id, subject
+            ):
+                raise _missing("formal_acquisition")
+            await self._formal_qualified(row)
+            ref = formal_ref(row)
+            ready = await self._formal_version(
+                row["owner_subject"], ref, expected=row["delivery_digest"], skill=skill
+            )
+            if not runtime:
+                await self.repo.acquire_formal_listing(listing_id, subject)
+            result = {
+                "listing_id": str(listing_id),
+                "reference": ref,
+                "delivery_digest": row["delivery_digest"],
+                "status": "acquired",
+            }
+            if skill is not None and runtime:
+                package = ready.get("package")
+                if not isinstance(package, dict) or package.get("method") != skill:
+                    raise BadGatewayError("Different Skill delivery")
+                result["package"] = package
+            result["skill_dependencies"] = ready["skill_dependencies"]
+            return result
 
     # ================= 专家条目 =================
     async def set_expert_listing(
@@ -1665,6 +1808,22 @@ class MarketAdmin:
             ):
                 delisted += 1
         return {"checked": len(listings), "delisted": delisted, "skipped": None}
+
+    async def pending_formal(self, page):
+        rows = await self.repo.pending_formal_listings(
+            (page - 1) * PAGE_SIZE, PAGE_SIZE
+        )
+        return [
+            {
+                "listing_id": str(r["id"]),
+                "reference": formal_ref(r),
+                "category": r["category"],
+                "publisher_id": str(r["publisher_id"]),
+                "title": r["title"],
+                "purpose": r["purpose"],
+            }
+            for r in rows
+        ]
 
     async def queue(self) -> Row:
         today = self.now().date()

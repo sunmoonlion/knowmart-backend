@@ -24,6 +24,7 @@ from sqlalchemy import (
     SmallInteger,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -283,3 +284,38 @@ class ShopEvent(Base):
             "kind IN ('renamed', 'suspended', 'restored')", name="ck_shop_event_kind"
         ),
     )
+
+
+class FormalListing(Base):
+    __tablename__ = "formal_method_listing"
+    __table_args__ = (
+        UniqueConstraint("owner_subject", "method_id", "version"),
+        CheckConstraint("version > 0"),
+        CheckConstraint("status IN ('pending','listed','withdrawn','rejected')"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    owner_subject: Mapped[str] = mapped_column(String(512))
+    method_id: Mapped[uuid.UUID] = mapped_column()
+    version: Mapped[int] = mapped_column()
+    digest: Mapped[str] = mapped_column(String(71))
+    delivery_digest: Mapped[str] = mapped_column(String(71))
+    publisher_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("publisher.id", ondelete="RESTRICT")
+    )
+    category: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(Text)
+    purpose: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16))
+    reviewed_by: Mapped[str | None] = mapped_column(String(512))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class FormalAcquisition(Base):
+    __tablename__ = "formal_method_acquisition"
+    listing_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("formal_method_listing.id"), primary_key=True
+    )
+    buyer_subject: Mapped[str] = mapped_column(String(512), primary_key=True)
+    created_at: Mapped[datetime] = _now()

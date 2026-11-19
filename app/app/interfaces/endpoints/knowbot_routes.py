@@ -9,13 +9,18 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.application.errors.exceptions import BadRequestError, NotFoundError
+from app.application.errors.exceptions import (
+    BadRequestError,
+    ForbiddenError,
+    NotFoundError,
+)
 from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketService
@@ -23,7 +28,7 @@ from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_servi
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.knowbots.delivery import KnowbotDeliveryV1
 from app.domain.knowbots.directory import public_directory
-from app.domain.market import DemandIn
+from app.domain.market import DemandIn, FormalDeliveryIn
 from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
     ServiceCaller,
@@ -385,3 +390,21 @@ async def summon_return(
         },
         headers=NO_STORE,
     )
+
+
+@internal_router.post("/formal-methods/listings/{listing_id}/delivery")
+async def deliver_acquired_method(
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
+    listing_id: UUID,
+    body: FormalDeliveryIn,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowbench":
+        raise ForbiddenError("KnowBench runtime required", code="formal_runtime_denied")
+    result = await svc.acquire_formal(
+        body.buyer_subject,
+        listing_id,
+        runtime=True,
+        skill=body.skill.model_dump(mode="json") if body.skill else None,
+    )
+    return JSONResponse(result, headers=NO_STORE)

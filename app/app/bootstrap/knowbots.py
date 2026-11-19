@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.services.expert_catalog import ExpertCatalog
 from app.application.services.knowbot_service import KnowbotService
 from app.application.services.market import MarketAdmin, MarketService
+from app.infrastructure.external.formal_method_delivery import FormalMethodDelivery
 from app.infrastructure.external.knowbase_user_data import (
     KnowbaseLibrary,
     KnowbaseVault,
@@ -49,6 +50,7 @@ def market_service(session: AsyncSession) -> MarketService:
         SqlMarketRepository(session),
         SqlKnowbotRepository(session),
         _vault(),
+        formal_delivery=FormalMethodDelivery(),
         id_hash_key=settings.publisher_id_hash_key,
         public_market=settings.public_market_enabled,
         platform_credit_code=settings.platform_publisher_credit_code,
