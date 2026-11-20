@@ -1369,10 +1369,16 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     }
     body = FormalListingIn(reference=reference, category="tools.office")
 
+    started, resume = asyncio.Event(), asyncio.Event()
+
     class Runtime:
+        slow = False
         allowed = True
 
         async def check(self, owner, ref, skill):
+            if self.slow:
+                started.set()
+                await resume.wait()
             assert owner == SELLER and ref == reference
             if not self.allowed:
                 raise NotFoundError("Expired dependency license")
@@ -1465,7 +1471,17 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
     runtime.allowed = True
-    await call("withdraw_formal", SELLER, listing)
+    runtime.slow = True
+    fetching = asyncio.create_task(call("acquire_formal", OTHER, listing))
+    try:
+        async with asyncio.timeout(5):
+            await started.wait()
+            await call("withdraw_formal", SELLER, listing)
+    finally:
+        resume.set()
+    with pytest.raises(NotFoundError):
+        await fetching
+    runtime.slow = False
     assert not await shared(BUYER)
     with pytest.raises(NotFoundError):
         await call("acquire_formal", OTHER, listing)

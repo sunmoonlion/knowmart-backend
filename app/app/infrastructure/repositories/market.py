@@ -206,12 +206,11 @@ class SqlMarketRepository:
         )
         return [_row(row) for row in rows]
 
-    async def formal_listing(self, listing_id):
-        row = await self.session.scalar(
-            select(FormalListing)
-            .where(FormalListing.id == listing_id)
-            .with_for_update()
-        )
+    async def formal_listing(self, listing_id, *, lock=True):
+        stmt = select(FormalListing).where(FormalListing.id == listing_id)
+        if lock:
+            stmt = stmt.with_for_update()
+        row = await self.session.scalar(stmt.execution_options(populate_existing=True))
         return _row(row) if row else None
 
     async def update_formal_listing(self, listing_id, **changes):

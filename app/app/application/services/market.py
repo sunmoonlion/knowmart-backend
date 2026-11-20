@@ -700,9 +700,12 @@ class MarketService:
         check_category(body.category)
         async with self.repo.transaction():
             await self._open_shop(subject)
+            await self._qualified(subject, body.category)
+        ref = body.reference.model_dump(mode="json")
+        ready = await self._formal_version(subject, ref)
+        async with self.repo.transaction():
+            await self._open_shop(subject)
             publisher = await self._qualified(subject, body.category)
-            ref = body.reference.model_dump(mode="json")
-            ready = await self._formal_version(subject, ref)
             fields = dict(
                 id=uuid.uuid4(),
                 owner_subject=subject,
@@ -742,24 +745,38 @@ class MarketService:
         ):
             raise _missing("formal_listing")
 
+    async def _reviewable_formal(self, operator, listing_id, approve, *, lock):
+        row = await self.repo.formal_listing(listing_id, lock=lock)
+        allowed = ("pending",) if approve else ("pending", "listed", "withdrawn")
+        if not row or row["status"] not in allowed:
+            raise _missing("formal_listing")
+        if row["owner_subject"] == operator:
+            raise BadRequestError(
+                "An author cannot review their own listing", code="formal_self_review"
+            )
+        if approve and row["scope"] == "public":
+            await self._formal_qualified(row)
+        return row
+
     async def review_formal(self, operator, listing_id, decision):
-        async with self.repo.transaction():
-            row = await self.repo.formal_listing(listing_id)
-            if not row or row["status"] not in (
-                ("pending",) if decision.approve else ("pending", "listed", "withdrawn")
-            ):
-                raise _missing("formal_listing")
-            if row["owner_subject"] == operator:
-                raise BadRequestError(
-                    "An author cannot review their own listing",
-                    code="formal_self_review",
+        if decision.approve:
+            async with self.repo.transaction():
+                original = await self._reviewable_formal(
+                    operator, listing_id, True, lock=False
                 )
-            if decision.approve and row["scope"] == "public":
-                await self._formal_qualified(row)
+            if original["scope"] == "public":
                 await self._formal_version(
-                    row["owner_subject"],
-                    formal_ref(row),
-                    expected=row["delivery_digest"],
+                    original["owner_subject"],
+                    formal_ref(original),
+                    expected=original["delivery_digest"],
+                )
+        async with self.repo.transaction():
+            row = await self._reviewable_formal(
+                operator, listing_id, decision.approve, lock=True
+            )
+            if decision.approve and row != original:
+                raise _conflict(
+                    "Listing changed during review", "formal_listing_conflict"
                 )
             state = "listed" if decision.approve else "rejected"
             await self.repo.update_formal_listing(
@@ -783,27 +800,42 @@ class MarketService:
             await self.repo.update_formal_listing(listing_id, status="withdrawn")
             return {"listing_id": str(listing_id), "status": "withdrawn"}
 
+    async def _acquirable_formal(self, subject, listing_id, runtime, *, lock):
+        row = await self.repo.formal_listing(listing_id, lock=lock)
+        allowed_states = ("listed", "withdrawn") if runtime else ("listed",)
+        if not row or row["scope"] != "public" or row["status"] not in allowed_states:
+            raise _missing("formal_listing")
+        if runtime and not await self.repo.has_formal_acquisition(listing_id, subject):
+            raise _missing("formal_acquisition")
+        await self._formal_qualified(row)
+        return row
+
     async def acquire_formal(self, subject, listing_id, *, runtime=False, skill=None):
         if skill is not None and not runtime:
             raise _missing("formal_acquisition")
         async with self.repo.transaction():
-            row = await self.repo.formal_listing(listing_id)
-            allowed_states = ("listed", "withdrawn") if runtime else ("listed",)
-            if (
-                not row
-                or row["scope"] != "public"
-                or row["status"] not in allowed_states
-            ):
-                raise _missing("formal_listing")
-            if runtime and not await self.repo.has_formal_acquisition(
-                listing_id, subject
-            ):
-                raise _missing("formal_acquisition")
-            await self._formal_qualified(row)
-            ref = formal_ref(row)
-            ready = await self._formal_version(
-                row["owner_subject"], ref, expected=row["delivery_digest"], skill=skill
+            original = await self._acquirable_formal(
+                subject, listing_id, runtime, lock=False
             )
+        ref = formal_ref(original)
+        ready = await self._formal_version(
+            original["owner_subject"],
+            ref,
+            expected=original["delivery_digest"],
+            skill=skill,
+        )
+        async with self.repo.transaction():
+            row = await self._acquirable_formal(
+                subject, listing_id, runtime, lock=not runtime
+            )
+            if (
+                formal_ref(row) != ref
+                or row["owner_subject"] != original["owner_subject"]
+                or row["delivery_digest"] != original["delivery_digest"]
+            ):
+                raise _conflict(
+                    "Listing changed during delivery", "formal_listing_conflict"
+                )
             if not runtime:
                 await self.repo.acquire_formal_listing(listing_id, subject)
             result = {
