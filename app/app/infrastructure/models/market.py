@@ -289,7 +289,19 @@ class ShopEvent(Base):
 class FormalListing(Base):
     __tablename__ = "formal_method_listing"
     __table_args__ = (
-        UniqueConstraint("owner_subject", "method_id", "version"),
+        UniqueConstraint(
+            "owner_subject",
+            "method_id",
+            "version",
+            "scope",
+            name="uq_formal_listing_scope",
+        ),
+        CheckConstraint(
+            "(scope = 'self' AND publisher_id IS NULL AND delivery_digest IS NULL) OR "
+            "(scope = 'public' AND publisher_id IS NOT NULL "
+            "AND delivery_digest IS NOT NULL)",
+            name="ck_formal_listing_scope",
+        ),
         CheckConstraint("version > 0"),
         CheckConstraint("status IN ('pending','listed','withdrawn','rejected')"),
     )
@@ -299,8 +311,9 @@ class FormalListing(Base):
     method_id: Mapped[uuid.UUID] = mapped_column()
     version: Mapped[int] = mapped_column()
     digest: Mapped[str] = mapped_column(String(71))
-    delivery_digest: Mapped[str] = mapped_column(String(71))
-    publisher_id: Mapped[uuid.UUID] = mapped_column(
+    delivery_digest: Mapped[str | None] = mapped_column(String(71))
+    scope: Mapped[str] = mapped_column(String(8), server_default="public")
+    publisher_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("publisher.id", ondelete="RESTRICT")
     )
     category: Mapped[str] = mapped_column(String(64))

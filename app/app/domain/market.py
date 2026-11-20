@@ -324,6 +324,23 @@ class FormalListingIn(Strict):
     category: str = Field(min_length=1, max_length=64)
 
 
+class FormalUseQuery(Strict):
+    model_config = ConfigDict(str_strip_whitespace=False)
+    owner_subject: str = Field(min_length=1, max_length=512)
+    references: list[FormalReference] = Field(min_length=1, max_length=100)
+
+
+class FormalSelfListingIn(Strict):
+    model_config = ConfigDict(str_strip_whitespace=False)
+    owner_subject: str = Field(min_length=1, max_length=512)
+    reference: FormalReference
+    title: str = Field(min_length=1, max_length=20000)
+    purpose: str = Field(min_length=1, max_length=20000)
+    review_findings: list[Literal["outputs_missing", "flagged_word"]] = Field(
+        max_length=2
+    )
+
+
 class FormalDeliveryIn(Strict):
     model_config = ConfigDict(str_strip_whitespace=False)
     buyer_subject: str = Field(min_length=1, max_length=512)

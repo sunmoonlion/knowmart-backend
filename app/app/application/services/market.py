@@ -576,6 +576,52 @@ class MarketService:
             raise BadGatewayError("Formal dependency lock differs")
         return body
 
+    async def submit_formal_self(self, body):
+        # KnowLab sends the immutable identity and review over the deliver relation.
+        ref = body.reference
+        async with self.repo.transaction():
+            row = await self.repo.submit_formal_listing(
+                dict(
+                    id=uuid.uuid4(),
+                    owner_subject=body.owner_subject,
+                    method_id=ref.method_id,
+                    version=ref.version,
+                    digest=ref.digest,
+                    delivery_digest=None,
+                    scope="self",
+                    publisher_id=None,
+                    category=DEFAULT_CATEGORY,
+                    title=body.title,
+                    purpose=body.purpose,
+                    status="pending" if body.review_findings else "listed",
+                    reviewed_at=None if body.review_findings else self.now(),
+                    review_note=", ".join(body.review_findings)
+                    or "automatic self-use review",
+                )
+            )
+            if row["digest"] != ref.digest:
+                raise _conflict(
+                    "Different frozen self-use version", "formal_listing_conflict"
+                )
+            return {
+                "listing_id": str(row["id"]),
+                "reference": formal_ref(row),
+                "scope": "self",
+                "status": row["status"],
+            }
+
+    async def eligible_formal_refs(self, subject, references):
+        eligible = {}
+        async with self.repo.transaction():
+            for row in await self.repo.owner_formal_listings(subject, references):
+                if row["scope"] == "public":
+                    try:
+                        await self._formal_qualified(row)
+                    except NotFoundError:
+                        continue
+                eligible[(row["method_id"], row["version"])] = formal_ref(row)
+        return list(eligible.values())
+
     async def submit_formal(self, subject, body):
         if not self.public_market:
             raise _missing("formal_listing")
@@ -596,6 +642,7 @@ class MarketService:
                 purpose=ready["purpose"],
                 category=body.category,
                 publisher_id=publisher["id"],
+                scope="public",
                 status="pending",
             )
             row = await self.repo.submit_formal_listing(fields)
@@ -630,7 +677,12 @@ class MarketService:
                 ("pending",) if decision.approve else ("pending", "listed", "withdrawn")
             ):
                 raise _missing("formal_listing")
-            if decision.approve:
+            if row["owner_subject"] == operator:
+                raise BadRequestError(
+                    "An author cannot review their own listing",
+                    code="formal_self_review",
+                )
+            if decision.approve and row["scope"] == "public":
                 await self._formal_qualified(row)
                 await self._formal_version(
                     row["owner_subject"],
@@ -665,7 +717,11 @@ class MarketService:
         async with self.repo.transaction():
             row = await self.repo.formal_listing(listing_id)
             allowed_states = ("listed", "withdrawn") if runtime else ("listed",)
-            if not row or row["status"] not in allowed_states:
+            if (
+                not row
+                or row["scope"] != "public"
+                or row["status"] not in allowed_states
+            ):
                 raise _missing("formal_listing")
             if runtime and not await self.repo.has_formal_acquisition(
                 listing_id, subject
@@ -1818,7 +1874,9 @@ class MarketAdmin:
                 "listing_id": str(r["id"]),
                 "reference": formal_ref(r),
                 "category": r["category"],
-                "publisher_id": str(r["publisher_id"]),
+                "publisher_id": str(r["publisher_id"]) if r["publisher_id"] else None,
+                "scope": r["scope"],
+                "review_note": r["review_note"],
                 "title": r["title"],
                 "purpose": r["purpose"],
             }

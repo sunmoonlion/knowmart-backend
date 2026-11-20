@@ -1444,3 +1444,58 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     await call("withdraw_formal", SELLER, listing)
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing, runtime=True)
+
+
+async def test_self_listing_exact_owner_retry_review_and_withdrawal(world):
+    from app.domain.market import FormalSelfListingIn
+
+    body = FormalSelfListingIn(
+        owner_subject=SELLER,
+        reference={
+            "method_id": str(uuid.uuid4()),
+            "version": 1,
+            "digest": "sha256:" + "a" * 64,
+        },
+        title="Owner method",
+        purpose="Test",
+        review_findings=["outputs_missing"],
+    )
+
+    async def call(method, *args, **kwargs):
+        async with world.db() as session:
+            return await getattr(world.svc(session), method)(*args, **kwargs)
+
+    async def eligible(subject, reference):
+        return reference.model_dump(mode="json") in await call(
+            "eligible_formal_refs", subject, [reference]
+        )
+
+    assert not await eligible(SELLER, body.reference)
+    first, retry = await asyncio.gather(
+        *(call("submit_formal_self", body) for _ in range(2))
+    )
+    assert first == retry and first["status"] == "pending"
+    listing = uuid.UUID(first["listing_id"])
+    assert not await eligible(SELLER, body.reference)
+    with pytest.raises(BadRequestError):
+        await call("review_formal", SELLER, listing, ReviewDecision(approve=True))
+    await call("review_formal", OPS, listing, ReviewDecision(approve=True))
+    assert await eligible(SELLER, body.reference)
+    assert not await eligible(BUYER, body.reference)
+    assert not await eligible(SELLER, body.reference.model_copy(update={"version": 2}))
+    assert not await eligible(
+        SELLER,
+        body.reference.model_copy(update={"digest": "sha256:" + "2" * 64}),
+    )
+    with pytest.raises(NotFoundError):
+        await call("acquire_formal", BUYER, listing)
+    await call("withdraw_formal", SELLER, listing)
+    assert not await eligible(SELLER, body.reference)
+    assert (await call("submit_formal_self", body))["status"] == "withdrawn"
+    other = body.model_copy(
+        update={
+            "review_findings": [],
+            "reference": body.reference.model_copy(update={"version": 2}),
+        }
+    )
+    assert (await call("submit_formal_self", other))["status"] == "listed"

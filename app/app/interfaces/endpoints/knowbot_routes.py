@@ -28,7 +28,12 @@ from app.bootstrap.knowbots import expert_catalog, knowbot_service, market_servi
 from app.domain.cross_app import clean_origin, known_apps, return_url
 from app.domain.knowbots.delivery import KnowbotDeliveryV1
 from app.domain.knowbots.directory import public_directory
-from app.domain.market import DemandIn, FormalDeliveryIn
+from app.domain.market import (
+    DemandIn,
+    FormalDeliveryIn,
+    FormalSelfListingIn,
+    FormalUseQuery,
+)
 from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
     ServiceCaller,
@@ -386,6 +391,36 @@ async def summon_return(
             "contract_version": CONTRACT_VERSION,
             "return_url": _with_knowbot(
                 target, f"{found.knowbot_id}@{found.version.version}"
+            ),
+        },
+        headers=NO_STORE,
+    )
+
+
+@internal_router.post("/formal-methods/self-listings")
+async def formal_self_listing(
+    caller: Annotated[ServiceCaller, Depends(require_deliver_service)],
+    body: FormalSelfListingIn,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowlab":
+        raise ForbiddenError("KnowLab delivery required")
+    return JSONResponse(await svc.submit_formal_self(body), headers=NO_STORE)
+
+
+@internal_router.post("/formal-methods/eligible")
+async def formal_owner_use(
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
+    body: FormalUseQuery,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowbench":
+        raise ForbiddenError("KnowBench runtime required")
+    return JSONResponse(
+        {
+            "owner_subject": body.owner_subject,
+            "allowed": await svc.eligible_formal_refs(
+                body.owner_subject, body.references
             ),
         },
         headers=NO_STORE,

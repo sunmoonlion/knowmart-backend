@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -127,7 +127,7 @@ class SqlMarketRepository:
             pg_insert(FormalListing)
             .values(**fields)
             .on_conflict_do_nothing(
-                index_elements=["owner_subject", "method_id", "version"]
+                index_elements=["owner_subject", "method_id", "version", "scope"]
             )
         )
         row = (
@@ -137,11 +137,24 @@ class SqlMarketRepository:
                     FormalListing.owner_subject == fields["owner_subject"],
                     FormalListing.method_id == fields["method_id"],
                     FormalListing.version == fields["version"],
+                    FormalListing.scope == fields["scope"],
                 )
                 .with_for_update()
             )
         ).scalar_one()
         return _row(row)
+
+    async def owner_formal_listings(self, owner, references):
+        rows = await self.session.scalars(
+            select(FormalListing).where(
+                FormalListing.owner_subject == owner,
+                tuple_(
+                    FormalListing.method_id, FormalListing.version, FormalListing.digest
+                ).in_([(r.method_id, r.version, r.digest) for r in references]),
+                FormalListing.status == "listed",
+            )
+        )
+        return [_row(row) for row in rows]
 
     async def formal_listing(self, listing_id):
         row = await self.session.scalar(
