@@ -22,6 +22,7 @@ from app.domain.market import (
     DemandIn,
     ExpertListingIn,
     FormalListingIn,
+    IncubationPermission,
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
@@ -567,6 +568,20 @@ async def sweep(admin: Admin) -> JSONResponse:
 @web_router.post("/formal-methods/listings")
 async def submit_formal(principal: User, body: FormalListingIn, svc: Service):
     return ok(await svc.submit_formal(principal.subject, body))
+
+
+@web_router.get("/formal-methods/incubation-permissions")
+async def author_incubation_listings(
+    principal: User, svc: Service, after: UUID | None = None
+):
+    return ok(await svc.author_incubation_listings(principal.subject, after))
+
+
+@web_router.put("/formal-methods/listings/{listing_id}/incubation-permission")
+async def permit_incubation(
+    principal: User, listing_id: UUID, body: IncubationPermission, svc: Service
+):
+    return ok(await svc.permit_incubation(principal.subject, listing_id, body))
 
 
 @web_router.delete("/formal-methods/listings/{listing_id}")

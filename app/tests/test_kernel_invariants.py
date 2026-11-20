@@ -59,6 +59,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20261101_0014_trade_expert_unique_index.py",
         "20261120_0015_formal_method_acquisition.py",
         "20261120_0016_self_method_listing.py",
+        "20261120_0017_formal_composition.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert 'down_revision = "20261101_0014"' in contents[14]

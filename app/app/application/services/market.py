@@ -576,6 +576,78 @@ class MarketService:
             raise BadGatewayError("Formal dependency lock differs")
         return body
 
+    async def author_incubation_listings(self, subject, after, limit=30):
+        async with self.repo.transaction():
+            rows = await self.repo.author_incubation_listings(subject, after, limit)
+            return {
+                "items": [
+                    {
+                        "listing_id": str(row["id"]),
+                        "reference": formal_ref(row),
+                        "title": row["title"],
+                        "scope": row["incubation_scope"],
+                        "listed": row["status"] == "listed",
+                    }
+                    for row in rows[:limit]
+                ],
+                "next": str(rows[limit - 1]["id"]) if len(rows) > limit else None,
+            }
+
+    async def permit_incubation(self, subject, listing_id, permission):
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id)
+            if not row or row["owner_subject"] != subject or row["scope"] != "public":
+                raise _missing("formal_listing")
+            if permission.scope != "none":
+                if row["status"] != "listed":
+                    raise _missing("formal_listing")
+                await self._formal_qualified(row)
+                if permission.scope == "platform" and not is_platform(
+                    await self.repo.get_publisher(str(row["publisher_id"])),
+                    self.platform_credit_code,
+                ):
+                    raise BadRequestError(
+                        "Platform-wide use requires an approved platform publisher"
+                    )
+            await self.repo.update_formal_listing(
+                listing_id, incubation_scope=permission.scope
+            )
+            return {
+                "listing_id": str(listing_id),
+                "reference": formal_ref(row),
+                "scope": permission.scope,
+            }
+
+    async def incubation_tools(self, query):
+        async with self.repo.transaction():
+            rows = await self.repo.incubation_listings(query)
+            items = []
+            for row in rows[: query.limit]:
+                try:
+                    await self._formal_qualified(row)
+                except NotFoundError:
+                    continue
+                if row["incubation_scope"] == "platform" and not is_platform(
+                    await self.repo.get_publisher(str(row["publisher_id"])),
+                    self.platform_credit_code,
+                ):
+                    continue
+                items.append(
+                    {
+                        "owner_subject": row["owner_subject"],
+                        "reference": formal_ref(row),
+                        "scope": row["incubation_scope"],
+                        "listing_id": str(row["id"]),
+                    }
+                )
+            return {
+                "subject": query.subject,
+                "items": items,
+                "next": str(rows[query.limit - 1]["id"])
+                if len(rows) > query.limit
+                else None,
+            }
+
     async def submit_formal_self(self, body):
         # KnowLab sends the immutable identity and review over the deliver relation.
         ref = body.reference

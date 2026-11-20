@@ -1410,6 +1410,25 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     await call("review_formal", OPS, listing, ReviewDecision(approve=True))
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
+    from app.domain.market import IncubationPermission, IncubationToolsQuery
+
+    async def shared(subject):
+        return (
+            await call(
+                "incubation_tools",
+                IncubationToolsQuery(subject=subject, reference=body.reference),
+            )
+        )["items"]
+
+    assert not await shared(BUYER)
+    with pytest.raises(NotFoundError):
+        await call(
+            "permit_incubation", BUYER, listing, IncubationPermission(scope="acquired")
+        )
+    with pytest.raises(BadRequestError):
+        await call(
+            "permit_incubation", SELLER, listing, IncubationPermission(scope="platform")
+        )
     first, second = await asyncio.gather(
         *(call("acquire_formal", BUYER, listing) for _ in range(2))
     )
@@ -1424,6 +1443,22 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     assert "package" in await call(
         "acquire_formal", BUYER, listing, runtime=True, skill=reference
     )
+    assert not await shared(BUYER)
+    await call(
+        "permit_incubation", SELLER, listing, IncubationPermission(scope="acquired")
+    )
+    assert (await shared(BUYER))[0]["reference"] == reference and not await shared(
+        OTHER
+    )
+    assert (await call("author_incubation_listings", SELLER, None))["items"][0][
+        "scope"
+    ] == "acquired"
+    assert not (await call("author_incubation_listings", OTHER, None))["items"]
+    await call("permit_incubation", SELLER, listing, IncubationPermission(scope="none"))
+    assert not await shared(BUYER)
+    await call(
+        "permit_incubation", SELLER, listing, IncubationPermission(scope="acquired")
+    )
     with pytest.raises(NotFoundError):
         await call("acquire_formal", OTHER, listing, runtime=True)
     runtime.allowed = False
@@ -1431,6 +1466,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
     runtime.allowed = True
     await call("withdraw_formal", SELLER, listing)
+    assert not await shared(BUYER)
     with pytest.raises(NotFoundError):
         await call("acquire_formal", OTHER, listing)
     assert "package" in await call(

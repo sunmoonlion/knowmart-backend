@@ -144,6 +144,56 @@ class SqlMarketRepository:
         ).scalar_one()
         return _row(row)
 
+    async def author_incubation_listings(self, subject, after, limit):
+        stmt = select(FormalListing).where(
+            FormalListing.owner_subject == subject,
+            FormalListing.scope == "public",
+            or_(
+                FormalListing.status == "listed",
+                FormalListing.incubation_scope != "none",
+            ),
+        )
+        if after:
+            stmt = stmt.where(FormalListing.id > after)
+        return [
+            _row(r)
+            for r in await self.session.scalars(
+                stmt.order_by(FormalListing.id).limit(limit + 1)
+            )
+        ]
+
+    async def incubation_listings(self, query):
+        acquired = (
+            select(FormalAcquisition.listing_id)
+            .where(
+                FormalAcquisition.buyer_subject == query.subject,
+                FormalAcquisition.listing_id == FormalListing.id,
+            )
+            .exists()
+        )
+        stmt = select(FormalListing).where(
+            FormalListing.scope == "public",
+            FormalListing.status == "listed",
+            FormalListing.owner_subject != query.subject,
+            or_(
+                FormalListing.incubation_scope == "platform",
+                (FormalListing.incubation_scope == "acquired") & acquired,
+            ),
+        )
+        if query.after:
+            stmt = stmt.where(FormalListing.id > query.after)
+        if query.reference:
+            ref = query.reference
+            stmt = stmt.where(
+                FormalListing.method_id == ref.method_id,
+                FormalListing.version == ref.version,
+                FormalListing.digest == ref.digest,
+            )
+        rows = await self.session.scalars(
+            stmt.order_by(FormalListing.id).limit(query.limit + 1)
+        )
+        return [_row(row) for row in rows]
+
     async def owner_formal_listings(self, owner, references):
         rows = await self.session.scalars(
             select(FormalListing).where(

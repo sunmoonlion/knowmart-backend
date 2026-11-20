@@ -319,6 +319,18 @@ class FormalReference(Strict):
     digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
 
 
+class IncubationPermission(Strict):
+    scope: Literal["none", "acquired", "platform"]
+
+
+class IncubationToolsQuery(Strict):
+    model_config = ConfigDict(str_strip_whitespace=False)
+    subject: str = Field(min_length=1, max_length=512)
+    reference: FormalReference | None = None
+    after: uuid.UUID | None = None
+    limit: int = Field(default=30, strict=True, ge=1, le=100)
+
+
 class FormalListingIn(Strict):
     reference: FormalReference
     category: str = Field(min_length=1, max_length=64)

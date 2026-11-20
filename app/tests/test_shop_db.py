@@ -618,3 +618,53 @@ async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> N
         )
 
     await world.run(buy_and_violate)
+
+
+async def test_platform_incubation_access_tracks_verified_publisher(world):
+    from unittest.mock import AsyncMock
+    from uuid import UUID, uuid4
+
+    from app.domain.market import (
+        FormalListingIn,
+        IncubationPermission,
+        IncubationToolsQuery,
+    )
+
+    ref = {"method_id": str(uuid4()), "version": 2, "digest": "sha256:" + "2" * 64}
+
+    async def work(svc, admin):
+        pub = await svc.save_publisher(
+            SELLER,
+            PublisherIn(
+                kind="organization",
+                name="平台测试",
+                credit_code=PLATFORM_CODE,
+                legal_person="王五",
+                contact_name="赵六",
+            ),
+        )
+        await admin.decide_publisher(
+            pub["publisher"]["publisher_id"], ReviewDecision(approve=True), OPS
+        )
+        svc.formal_delivery = AsyncMock()
+        svc.formal_delivery.check.return_value = {
+            "title": "Tool",
+            "purpose": "Test",
+            "skill_dependencies": [],
+            "delivery_digest": "sha256:" + "a" * 64,
+        }
+        row = await svc.submit_formal(
+            SELLER, FormalListingIn(reference=ref, category="tools.office")
+        )
+        listing = UUID(row["listing_id"])
+        await svc.review_formal(OPS, listing, ReviewDecision(approve=True))
+        query = IncubationToolsQuery(subject=OTHER)
+        assert (await svc.incubation_tools(query))["items"] == []
+        await svc.permit_incubation(
+            SELLER, listing, IncubationPermission(scope="platform")
+        )
+        assert (await svc.incubation_tools(query))["items"][0]["reference"] == ref
+        svc.platform_credit_code = ""
+        assert (await svc.incubation_tools(query))["items"] == []
+
+    await world.run(work)

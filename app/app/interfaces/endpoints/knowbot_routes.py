@@ -33,6 +33,7 @@ from app.domain.market import (
     FormalDeliveryIn,
     FormalSelfListingIn,
     FormalUseQuery,
+    IncubationToolsQuery,
 )
 from app.domain.security import BrowserSession
 from app.infrastructure.security.relation_auth import (
@@ -406,6 +407,17 @@ async def formal_self_listing(
     if caller.caller != "knowlab":
         raise ForbiddenError("KnowLab delivery required")
     return JSONResponse(await svc.submit_formal_self(body), headers=NO_STORE)
+
+
+@internal_router.post("/formal-methods/incubation-tools")
+async def incubation_tools(
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
+    body: IncubationToolsQuery,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowbench":
+        raise ForbiddenError("KnowBench runtime required")
+    return JSONResponse(await svc.incubation_tools(body), headers=NO_STORE)
 
 
 @internal_router.post("/formal-methods/eligible")
