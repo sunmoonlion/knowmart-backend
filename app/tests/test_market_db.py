@@ -8,6 +8,7 @@ import hashlib
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -1396,7 +1397,11 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         async with world.db() as session:
             service = world.svc(session)
             service.public_market = True
-            service.formal_delivery = runtime
+            async def check(*args):
+                assert not session.in_transaction()
+                return await runtime.check(*args)
+
+            service.formal_delivery = SimpleNamespace(check=check)
             return await getattr(service, method)(*args, **kwargs)
 
     with pytest.raises(BadRequestError):
