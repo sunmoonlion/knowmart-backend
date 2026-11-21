@@ -1491,7 +1491,8 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         resume.set()
     with pytest.raises(NotFoundError):
         await fetching
-    assert not await planning(BUYER)
+    assert await planning(BUYER) == [reference]
+    assert not await planning(OTHER)
     runtime.slow = False
     assert not await shared(BUYER)
     with pytest.raises(NotFoundError):
