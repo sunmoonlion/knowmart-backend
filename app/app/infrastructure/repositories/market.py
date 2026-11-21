@@ -194,10 +194,21 @@ class SqlMarketRepository:
         )
         return [_row(row) for row in rows]
 
-    async def owner_formal_listings(self, owner, references):
+    async def owner_formal_listings(self, owner, references, *, include_acquired=False):
+        access = FormalListing.owner_subject == owner
+        if include_acquired:
+            acquired = (
+                select(FormalAcquisition.listing_id)
+                .where(
+                    FormalAcquisition.listing_id == FormalListing.id,
+                    FormalAcquisition.buyer_subject == owner,
+                )
+                .exists()
+            )
+            access = or_(access, (FormalListing.scope == "public") & acquired)
         rows = await self.session.scalars(
             select(FormalListing).where(
-                FormalListing.owner_subject == owner,
+                access,
                 tuple_(
                     FormalListing.method_id, FormalListing.version, FormalListing.digest
                 ).in_([(r.method_id, r.version, r.digest) for r in references]),

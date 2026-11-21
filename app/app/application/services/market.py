@@ -682,10 +682,14 @@ class MarketService:
                 "status": row["status"],
             }
 
-    async def eligible_formal_refs(self, subject, references):
+    async def eligible_formal_refs(
+        self, subject, references, *, include_acquired=False
+    ):
         eligible = {}
         async with self.repo.transaction():
-            for row in await self.repo.owner_formal_listings(subject, references):
+            for row in await self.repo.owner_formal_listings(
+                subject, references, include_acquired=include_acquired
+            ):
                 if row["scope"] == "public":
                     try:
                         await self._formal_qualified(row)

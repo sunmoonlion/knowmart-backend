@@ -337,6 +337,7 @@ class FormalListingIn(Strict):
 
 
 class FormalUseQuery(Strict):
+    include_acquired: bool = False
     model_config = ConfigDict(str_strip_whitespace=False)
     owner_subject: str = Field(min_length=1, max_length=512)
     references: list[FormalReference] = Field(min_length=1, max_length=100)

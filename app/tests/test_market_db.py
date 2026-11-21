@@ -1414,6 +1414,14 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing)
     await call("review_formal", OPS, listing, ReviewDecision(approve=True))
+
+    async def planning(subject):
+        return await call(
+            "eligible_formal_refs", subject, [body.reference], include_acquired=True
+        )
+
+    assert not await planning(BUYER)
+
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing, runtime=True, skill=reference)
     from app.domain.market import IncubationPermission, IncubationToolsQuery
@@ -1449,6 +1457,8 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     assert "package" in await call(
         "acquire_formal", BUYER, listing, runtime=True, skill=reference
     )
+    assert await planning(BUYER) == [reference]
+    assert not await planning(OTHER)
     assert not await shared(BUYER)
     await call(
         "permit_incubation", SELLER, listing, IncubationPermission(scope="acquired")
@@ -1481,6 +1491,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         resume.set()
     with pytest.raises(NotFoundError):
         await fetching
+    assert not await planning(BUYER)
     runtime.slow = False
     assert not await shared(BUYER)
     with pytest.raises(NotFoundError):

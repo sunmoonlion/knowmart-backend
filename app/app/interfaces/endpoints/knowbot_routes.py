@@ -432,7 +432,9 @@ async def formal_owner_use(
         {
             "owner_subject": body.owner_subject,
             "allowed": await svc.eligible_formal_refs(
-                body.owner_subject, body.references
+                body.owner_subject,
+                body.references,
+                include_acquired=body.include_acquired,
             ),
         },
         headers=NO_STORE,
