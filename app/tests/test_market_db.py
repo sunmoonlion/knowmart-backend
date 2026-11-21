@@ -30,6 +30,7 @@ from app.domain.market import (
     DemandIn,
     ExpertListingIn,
     FormalListingIn,
+    FormalPlanningWindow,
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
@@ -1397,6 +1398,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         async with world.db() as session:
             service = world.svc(session)
             service.public_market = True
+
             async def check(*args):
                 assert not session.in_transaction()
                 return await runtime.check(*args)
@@ -1421,9 +1423,14 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     await call("review_formal", OPS, listing, ReviewDecision(approve=True))
 
     async def planning(subject):
-        return await call(
+        eligible = await call(
             "eligible_formal_refs", subject, [body.reference], include_acquired=True
         )
+        page = await call(
+            "planning_window", FormalPlanningWindow(owner_subject=subject, limit=1)
+        )
+        assert page == {"owner_subject": subject, "references": eligible, "more": False}
+        return eligible
 
     assert not await planning(BUYER)
 
@@ -1506,6 +1513,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         "acquire_formal", BUYER, listing, runtime=True, skill=reference
     )
     await _edit_publisher(world)
+    assert not await planning(BUYER)
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing)
     with pytest.raises(NotFoundError):
@@ -1550,6 +1558,30 @@ async def test_self_listing_exact_owner_retry_review_and_withdrawal(world):
         await call("review_formal", SELLER, listing, ReviewDecision(approve=True))
     await call("review_formal", OPS, listing, ReviewDecision(approve=True))
     assert await eligible(SELLER, body.reference)
+    # Two eligible versions of the same method must cross a window boundary in
+    # stable order while an unlisted version stays out of both pages.
+    other_version = body.model_copy(
+        update={"reference": body.reference.model_copy(update={"version": 3})}
+    )
+    listed = await call("submit_formal_self", other_version)
+    await call(
+        "review_formal",
+        OPS,
+        uuid.UUID(listed["listing_id"]),
+        ReviewDecision(approve=True),
+    )
+    for offset, ref, more in [
+        (0, body.reference, True),
+        (1, other_version.reference, False),
+    ]:
+        page = await call(
+            "planning_window",
+            FormalPlanningWindow(owner_subject=SELLER, offset=offset, limit=1),
+        )
+        assert (
+            page["references"] == [ref.model_dump(mode="json")] and page["more"] is more
+        )
+
     assert not await eligible(BUYER, body.reference)
     assert not await eligible(SELLER, body.reference.model_copy(update={"version": 2}))
     assert not await eligible(

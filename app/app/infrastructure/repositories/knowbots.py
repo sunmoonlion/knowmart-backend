@@ -72,7 +72,7 @@ NO_LICENSE_CATEGORIES = tuple(
 )
 
 
-def _license_valid(today: date):
+def license_valid(today: date):
     """审核通过、未过期的资质（valid_until 为空算长期有效）。"""
     return and_(
         PublisherLicense.review_status == "approved",
@@ -97,7 +97,7 @@ def public_to_others(today: date):
     licensed = exists().where(
         PublisherLicense.publisher_id == Knowbot.publisher_id,
         PublisherLicense.category == Knowbot.category,
-        _license_valid(today),
+        license_valid(today),
     )
     shown = exists().where(
         KnowbotVersion.knowbot_id == Knowbot.id,
@@ -322,7 +322,7 @@ class SqlKnowbotRepository:
                     .where(
                         PublisherLicense.publisher_id == publisher_id,
                         PublisherLicense.category == category,
-                        _license_valid(today),
+                        license_valid(today),
                     )
                     .order_by(PublisherLicense.created_at)
                 )

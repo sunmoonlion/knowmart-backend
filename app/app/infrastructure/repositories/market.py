@@ -41,7 +41,11 @@ from app.infrastructure.models.market import (
     TradeRequestAlias,
     TradeReview,
 )
-from app.infrastructure.repositories.knowbots import public_to_others, shop_suspended
+from app.infrastructure.repositories.knowbots import (
+    license_valid,
+    public_to_others,
+    shop_suspended,
+)
 
 # 要证照的类目
 LICENSED = tuple(c.code for c in CATEGORIES if c.license)
@@ -194,34 +198,75 @@ class SqlMarketRepository:
         )
         return [_row(row) for row in rows]
 
-    async def owner_formal_listings(self, owner, references, *, include_acquired=False):
-        access = (FormalListing.owner_subject == owner) & (
-            FormalListing.status == "listed"
-        )
-        if include_acquired:
-            acquired = (
-                select(FormalAcquisition.listing_id)
+    async def usable_formal_pins(
+        self,
+        owner,
+        *,
+        today,
+        public,
+        include_acquired,
+        references=None,
+        offset=0,
+        limit=None,
+    ):
+        # Apply public qualification before slicing, so unrelated listings and
+        # suspended publishers consume none of this buyer's planning window.
+        qualified = FormalListing.scope == "self"
+        if public:
+            publisher = (
+                select(Publisher.id)
                 .where(
-                    FormalAcquisition.listing_id == FormalListing.id,
-                    FormalAcquisition.buyer_subject == owner,
+                    Publisher.id == FormalListing.publisher_id,
+                    Publisher.review_status == "approved",
+                    Publisher.real_name_verified.is_(True),
                 )
                 .exists()
             )
-            access = or_(
-                access,
+            license = (
+                select(PublisherLicense.id)
+                .where(
+                    PublisherLicense.publisher_id == FormalListing.publisher_id,
+                    PublisherLicense.category == FormalListing.category,
+                    license_valid(today),
+                )
+                .exists()
+            )
+            qualified = or_(
+                qualified,
                 (FormalListing.scope == "public")
-                & FormalListing.status.in_(("listed", "withdrawn"))
-                & acquired,
+                & publisher
+                & ~shop_suspended(FormalListing.owner_subject)
+                & or_(FormalListing.category.not_in(LICENSED), license),
             )
-        rows = await self.session.scalars(
-            select(FormalListing).where(
-                access,
-                tuple_(
-                    FormalListing.method_id, FormalListing.version, FormalListing.digest
-                ).in_([(r.method_id, r.version, r.digest) for r in references]),
+        pin = (FormalListing.method_id, FormalListing.version, FormalListing.digest)
+        base = select(*pin).where(qualified)
+        if references is not None:
+            base = base.where(
+                tuple_(*pin).in_(
+                    [(r.method_id, r.version, r.digest) for r in references]
+                )
             )
+        owned = base.where(
+            FormalListing.owner_subject == owner, FormalListing.status == "listed"
         )
-        return [_row(row) for row in rows]
+        if public and include_acquired:
+            acquired = base.join(
+                FormalAcquisition, FormalAcquisition.listing_id == FormalListing.id
+            ).where(
+                FormalAcquisition.buyer_subject == owner,
+                FormalListing.scope == "public",
+                FormalListing.status.in_(("listed", "withdrawn")),
+            )
+            versions = owned.union(acquired).subquery()
+        else:
+            versions = owned.distinct().subquery()
+        stmt = select(versions).order_by(
+            versions.c.method_id, versions.c.version, versions.c.digest
+        )
+        if limit is not None:
+            stmt = stmt.offset(offset).limit(limit)
+        rows = (await self.session.execute(stmt)).mappings()
+        return [dict(row) for row in rows]
 
     async def formal_listing(self, listing_id, *, lock=True):
         stmt = select(FormalListing).where(FormalListing.id == listing_id)
@@ -408,11 +453,7 @@ class SqlMarketRepository:
             select(PublisherLicense.id).where(
                 PublisherLicense.publisher_id == publisher_id,
                 PublisherLicense.category == category,
-                PublisherLicense.review_status == "approved",
-                or_(
-                    PublisherLicense.valid_until.is_(None),
-                    PublisherLicense.valid_until >= today,
-                ),
+                license_valid(today),
             )
         )
         return found.first() is not None

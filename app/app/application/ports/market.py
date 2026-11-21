@@ -27,8 +27,16 @@ class MarketRepository(Protocol):
 
     async def incubation_listings(self, query) -> list[dict[str, Any]]: ...
 
-    async def owner_formal_listings(
-        self, owner: str, references: list[Any], *, include_acquired: bool = False
+    async def usable_formal_pins(
+        self,
+        owner: str,
+        *,
+        today: date,
+        public: bool,
+        include_acquired: bool,
+        references: list[Any] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> list[Row]: ...
     async def formal_listing(
         self, listing_id: uuid.UUID, *, lock: bool = True

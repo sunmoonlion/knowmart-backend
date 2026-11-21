@@ -438,3 +438,28 @@ async def test_find_expert_catalog_and_demands_for_the_user(wired) -> None:
         ]
     async with client("http://testserver") as c:  # 公网来的当没有
         assert (await c.get(f"{base}/catalog")).status_code == 404
+
+
+async def test_planning_window_accepts_only_knowbench_and_bounded_queries(
+    wired, monkeypatch
+):
+    async def page(body):
+        return {"owner_subject": body.owner_subject, "references": [], "more": False}
+
+    monkeypatch.setattr(SUMMONS, "planning_window", page, raising=False)
+    path = "/api/internal/v1/knowmart/formal-methods/planning-window"
+    async with client() as c:
+        body = {"owner_subject": OWNER, "offset": 0, "limit": 100}
+        result = await c.post(path, json=body)
+        assert (
+            result.status_code == 200 and result.headers["cache-control"] == "no-store"
+        )
+        assert result.json() == {
+            "owner_subject": OWNER,
+            "references": [],
+            "more": False,
+        }
+        for bad in ({"limit": 101}, {"offset": -1}, {"question": "private"}):
+            assert (await c.post(path, json={**body, **bad})).status_code == 422
+        app.dependency_overrides[require_summon_service] = lambda: _caller("knowlab")
+        assert (await c.post(path, json=body)).status_code == 403

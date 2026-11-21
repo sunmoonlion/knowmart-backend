@@ -31,6 +31,7 @@ from app.domain.knowbots.directory import public_directory
 from app.domain.market import (
     DemandIn,
     FormalDeliveryIn,
+    FormalPlanningWindow,
     FormalSelfListingIn,
     FormalUseQuery,
     IncubationToolsQuery,
@@ -418,6 +419,17 @@ async def incubation_tools(
     if caller.caller != "knowbench":
         raise ForbiddenError("KnowBench runtime required")
     return JSONResponse(await svc.incubation_tools(body), headers=NO_STORE)
+
+
+@internal_router.post("/formal-methods/planning-window")
+async def formal_planning_window(
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
+    body: FormalPlanningWindow,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowbench":
+        raise ForbiddenError("KnowBench runtime required")
+    return JSONResponse(await svc.planning_window(body), headers=NO_STORE)
 
 
 @internal_router.post("/formal-methods/eligible")

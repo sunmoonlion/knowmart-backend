@@ -336,6 +336,13 @@ class FormalListingIn(Strict):
     category: str = Field(min_length=1, max_length=64)
 
 
+class FormalPlanningWindow(Strict):
+    model_config = ConfigDict(str_strip_whitespace=False)
+    owner_subject: str = Field(min_length=1, max_length=512)
+    offset: int = Field(default=0, strict=True, ge=0, le=2147483647)
+    limit: int = Field(strict=True, ge=1, le=100)
+
+
 class FormalUseQuery(Strict):
     include_acquired: bool = False
     model_config = ConfigDict(str_strip_whitespace=False)

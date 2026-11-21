@@ -333,6 +333,9 @@ class FormalListing(Base):
 
 class FormalAcquisition(Base):
     __tablename__ = "formal_method_acquisition"
+    __table_args__ = (
+        Index("ix_formal_acquisition_buyer_listing", "buyer_subject", "listing_id"),
+    )
     listing_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("formal_method_listing.id"), primary_key=True
     )

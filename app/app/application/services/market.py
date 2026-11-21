@@ -685,18 +685,31 @@ class MarketService:
     async def eligible_formal_refs(
         self, subject, references, *, include_acquired=False
     ):
-        eligible = {}
         async with self.repo.transaction():
-            for row in await self.repo.owner_formal_listings(
-                subject, references, include_acquired=include_acquired
-            ):
-                if row["scope"] == "public":
-                    try:
-                        await self._formal_qualified(row)
-                    except NotFoundError:
-                        continue
-                eligible[(row["method_id"], row["version"])] = formal_ref(row)
-        return list(eligible.values())
+            rows = await self.repo.usable_formal_pins(
+                subject,
+                today=self.now().date(),
+                public=self.public_market,
+                include_acquired=include_acquired,
+                references=references,
+            )
+        return [formal_ref(row) for row in rows]
+
+    async def planning_window(self, query):
+        async with self.repo.transaction():
+            rows = await self.repo.usable_formal_pins(
+                query.owner_subject,
+                today=self.now().date(),
+                public=self.public_market,
+                include_acquired=True,
+                offset=query.offset,
+                limit=query.limit + 1,
+            )
+        return {
+            "owner_subject": query.owner_subject,
+            "references": [formal_ref(row) for row in rows[: query.limit]],
+            "more": len(rows) > query.limit,
+        }
 
     async def submit_formal(self, subject, body):
         if not self.public_market:
