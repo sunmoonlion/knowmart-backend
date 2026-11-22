@@ -565,6 +565,13 @@ async def sweep(admin: Admin) -> JSONResponse:
     return ok({**await admin.sweep(), "offers": await admin.check_offers()})
 
 
+@web_router.get("/formal-methods/listings")
+async def owner_formal_listings(
+    principal: User, svc: Service, after: UUID | None = None
+):
+    return ok(await svc.owner_formal_listings(principal.subject, after))
+
+
 @web_router.post("/formal-methods/listings")
 async def submit_formal(principal: User, body: FormalListingIn, svc: Service):
     return ok(await svc.submit_formal(principal.subject, body))

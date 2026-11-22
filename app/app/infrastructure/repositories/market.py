@@ -148,6 +148,15 @@ class SqlMarketRepository:
         ).scalar_one()
         return _row(row)
 
+    async def owner_formal_listings(self, subject, after, limit):
+        stmt = select(FormalListing).where(FormalListing.owner_subject == subject)
+        if after:
+            stmt = stmt.where(FormalListing.id > after)
+        rows = await self.session.scalars(
+            stmt.order_by(FormalListing.id).limit(limit + 1)
+        )
+        return [_row(row) for row in rows]
+
     async def author_incubation_listings(self, subject, after, limit):
         stmt = select(FormalListing).where(
             FormalListing.owner_subject == subject,

@@ -576,6 +576,23 @@ class MarketService:
             raise BadGatewayError("Formal dependency lock differs")
         return body
 
+    async def owner_formal_listings(self, subject, after, limit=30):
+        async with self.repo.transaction():
+            rows = await self.repo.owner_formal_listings(subject, after, limit)
+            return {
+                "items": [
+                    {
+                        "listing_id": str(row["id"]),
+                        "reference": formal_ref(row),
+                        "title": row["title"],
+                        "scope": row["scope"],
+                        "status": row["status"],
+                    }
+                    for row in rows[:limit]
+                ],
+                "next": str(rows[limit - 1]["id"]) if len(rows) > limit else None,
+            }
+
     async def author_incubation_listings(self, subject, after, limit=30):
         async with self.repo.transaction():
             rows = await self.repo.author_incubation_listings(subject, after, limit)
@@ -814,7 +831,8 @@ class MarketService:
                 raise _conflict(
                     "Listing is restricted by the operator", "formal_listing_rejected"
                 )
-            await self.repo.update_formal_listing(listing_id, status="withdrawn")
+            if row["status"] != "withdrawn":
+                await self.repo.update_formal_listing(listing_id, status="withdrawn")
             return {"listing_id": str(listing_id), "status": "withdrawn"}
 
     async def _acquirable_formal(self, subject, listing_id, runtime, *, lock):

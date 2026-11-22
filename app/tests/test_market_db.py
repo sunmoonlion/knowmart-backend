@@ -1553,6 +1553,11 @@ async def test_self_listing_exact_owner_retry_review_and_withdrawal(world):
     )
     assert first == retry and first["status"] == "pending"
     listing = uuid.UUID(first["listing_id"])
+    mine = await call("owner_formal_listings", SELLER, None)
+    assert [(r["listing_id"], r["scope"], r["status"]) for r in mine["items"]] == [
+        (str(listing), "self", "pending")
+    ]
+    assert (await call("owner_formal_listings", BUYER, None))["items"] == []
     assert not await eligible(SELLER, body.reference)
     with pytest.raises(BadRequestError):
         await call("review_formal", SELLER, listing, ReviewDecision(approve=True))
@@ -1592,6 +1597,13 @@ async def test_self_listing_exact_owner_retry_review_and_withdrawal(world):
         await call("acquire_formal", BUYER, listing)
     await call("withdraw_formal", SELLER, listing)
     assert not await eligible(SELLER, body.reference)
+    assert (await call("withdraw_formal", SELLER, listing))["status"] == "withdrawn"
+    page = await call("owner_formal_listings", SELLER, None, 1)
+    next_page = await call("owner_formal_listings", SELLER, uuid.UUID(page["next"]), 1)
+    states = {
+        row["listing_id"]: row["status"] for row in page["items"] + next_page["items"]
+    }
+    assert states == {str(listing): "withdrawn", listed["listing_id"]: "listed"}
     assert (await call("submit_formal_self", body))["status"] == "withdrawn"
     other = body.model_copy(
         update={
