@@ -21,6 +21,21 @@ class MarketRepository(Protocol):
 
     async def pending_formal_listings(self, offset: int, limit: int) -> list[Row]: ...
     async def submit_formal_listing(self, fields: Row) -> Row: ...
+    async def catalog_methods(
+        self,
+        viewer,
+        method_kind,
+        *,
+        public,
+        today,
+        words,
+        since,
+        codes,
+        sort,
+        offset,
+        limit,
+    ) -> tuple[list[Row], dict[str, int]]: ...
+
     async def owner_formal_listings(self, subject, after, limit) -> list[Row]: ...
     async def author_incubation_listings(
         self, subject, after, limit

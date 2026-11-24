@@ -1386,6 +1386,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
                 raise NotFoundError("Expired dependency license")
             return {
                 "title": "Synthetic Skill",
+                "method_kind": "tool",
                 "purpose": "Verify delivery",
                 "skill_dependencies": [],
                 "delivery_digest": "sha256:" + "2" * 64,
@@ -1415,12 +1416,32 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
             SELLER,
             body.model_copy(update={"category": "finance.securities_advisory"}),
         )
+
+    async def catalog(public):
+        async with world.db() as session:
+            rows, _ = await SqlMarketRepository(session).catalog_methods(
+                OTHER,
+                "tool",
+                public=public,
+                today=NOW.date(),
+                words="",
+                since=None,
+                codes=None,
+                sort="name",
+                offset=0,
+                limit=24,
+            )
+            return rows
+
     pending = await call("submit_formal", SELLER, body)
     listing = uuid.UUID(pending["listing_id"])
     assert await call("submit_formal", SELLER, body) == pending
     with pytest.raises(NotFoundError):
         await call("acquire_formal", BUYER, listing)
+    assert not await catalog(True)
     await call("review_formal", OPS, listing, ReviewDecision(approve=True))
+
+    assert len(await catalog(True)) == 1 and not await catalog(False)
 
     async def planning(subject):
         eligible = await call(
@@ -1505,6 +1526,7 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
         await fetching
     assert await planning(BUYER) == [reference]
     assert not await planning(OTHER)
+    assert not await catalog(True)
     runtime.slow = False
     assert not await shared(BUYER)
     with pytest.raises(NotFoundError):
@@ -1612,3 +1634,73 @@ async def test_self_listing_exact_owner_retry_review_and_withdrawal(world):
         }
     )
     assert (await call("submit_formal_self", other))["status"] == "listed"
+
+
+async def test_typed_catalog_uses_frozen_kind_and_visible_listings(world):
+    from app.application.services.expert_catalog import CatalogQuery
+    from app.domain.market import FormalSelfListingIn
+
+    async def scenario(svc, admin):
+        def listed(name, kind):
+            return FormalSelfListingIn(
+                owner_subject=SELLER,
+                reference={
+                    "method_id": str(uuid.uuid4()),
+                    "version": 1,
+                    "digest": "sha256:" + "b" * 64,
+                },
+                title=name,
+                purpose="test",
+                review_findings=[],
+                method_kind=kind,
+            )
+
+        tool = listed("a", "tool")
+        expert = listed("b", "expert")
+        original = await svc.submit_formal_self(
+            tool.model_copy(update={"method_kind": None})
+        )
+        assert (await svc.submit_formal_self(tool))["listing_id"] == original[
+            "listing_id"
+        ]
+        await svc.submit_formal_self(expert)
+        await svc.submit_formal_self(
+            tool.model_copy(
+                update={"reference": tool.reference.model_copy(update={"version": 2})}
+            )
+        )
+        directory = ExpertCatalog(svc.knowbots, now=lambda: NOW)
+
+        async def read(subject, kind, category=None):
+            return await directory.method_directory(
+                subject, CatalogQuery(category=category), kind, svc.repo
+            )
+
+        tools = await read(SELLER, "tool")
+        assert [r["reference"]["version"] for r in tools["items"]] == [2]
+        assert tools["categories"] == []
+        assert (await read(OTHER, "tool"))["total"] == 0
+        experts = await read(SELLER, "expert", "uncategorized")
+        assert experts["total"] == experts["categories"][0]["count"] == 1
+        assert experts["items"][0]["reference"] == expert.reference.model_dump(
+            mode="json"
+        )
+        assert (await read(SELLER, "expert", "finance"))["total"] == 0
+
+        for number in range(26):
+            await svc.submit_formal_self(listed(f"report {number:02}", "expert"))
+        pages = [
+            await directory.method_directory(
+                SELLER,
+                CatalogQuery(q="report", page=page, sort="name"),
+                "expert",
+                svc.repo,
+            )
+            for page in (1, 2)
+        ]
+        assert [r["name"] for page in pages for r in page["items"]] == [
+            f"report {number:02}" for number in range(26)
+        ]
+        assert all(page["total"] == 26 for page in pages)
+
+    await world.run(scenario)

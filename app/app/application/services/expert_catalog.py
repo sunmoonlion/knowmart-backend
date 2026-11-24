@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -149,6 +150,79 @@ class ExpertCatalog:
             "page": page,
             "page_size": PAGE_SIZE,
             "categories": counted,
+        }
+
+    async def method_directory(self, viewer, query, kind, market):
+        items = []
+        if kind == "expert":
+            items.extend(
+                self._item(bot, viewer)
+                for bot in await self._visible(viewer)
+                if self._matches(bot, query)
+            )
+        counts = Counter(item["category"]["code"] for item in items)
+        chosen = [
+            item
+            for item in items
+            if in_category(item["category"]["code"], query.category)
+        ]
+        start = (query.page - 1) * PAGE_SIZE
+        # Legacy experts can displace at most len(chosen) formal entries.
+        offset = max(0, start - len(chosen))
+        now = self.now()
+        window = UPDATED_WITHIN.get(query.updated)
+        codes = (
+            [c.code for c in CATEGORIES if in_category(c.code, query.category)]
+            if kind == "expert" and query.category
+            else None
+        )
+        rows, formal_counts = await market.catalog_methods(
+            viewer,
+            kind,
+            public=self.public_market,
+            today=now.date(),
+            words=(query.q or "").strip().lower(),
+            since=now - window if window else None,
+            codes=codes,
+            sort=query.sort,
+            offset=offset,
+            limit=start + PAGE_SIZE - offset,
+        )
+        total = len(chosen) + sum(
+            n for code, n in formal_counts.items() if codes is None or code in codes
+        )
+        counts.update(formal_counts)
+        for row in rows:
+            stamp = row["reviewed_at"]
+            chosen.append(
+                {
+                    "listing_id": str(row["id"]),
+                    "reference": {
+                        "method_id": str(row["method_id"]),
+                        "version": row["version"],
+                        "digest": row["digest"],
+                    },
+                    "method_kind": row["method_kind"],
+                    "name": row["title"],
+                    "tagline": row["purpose"],
+                    "category": category_view(row["category"]),
+                    "updated_at": stamp.isoformat() if stamp else "",
+                }
+            )
+        chosen.sort(key=lambda item: item.get("listing_id") or item.get("knowbot_id"))
+        chosen.sort(
+            key=lambda item: (
+                item["name"] if query.sort == "name" else item["updated_at"]
+            ),
+            reverse=query.sort != "name",
+        )
+        local_start = start - offset
+        return {
+            "items": chosen[local_start : local_start + PAGE_SIZE],
+            "total": total,
+            "categories": category_tree(counts) if kind == "expert" else [],
+            "page_size": PAGE_SIZE,
+            "page": query.page,
         }
 
     async def categories(self, owner_subject: str) -> list[dict[str, Any]]:
@@ -301,10 +375,15 @@ def _gaps(versions: Sequence[KnowbotVersionRecord]) -> list[str]:
 
 def _category_tree(bots: Sequence[KnowbotRecord]) -> list[dict[str, Any]]:
     """只列有专家的类目，按类目表的顺序；一级下面挂二级，都带数量。"""
-    counts: dict[str, int] = {}
-    for bot in bots:
-        code = bot.category if bot.category in BY_CODE else DEFAULT_CATEGORY
-        counts[code] = counts.get(code, 0) + 1
+    return category_tree(
+        Counter(
+            bot.category if bot.category in BY_CODE else DEFAULT_CATEGORY
+            for bot in bots
+        )
+    )
+
+
+def category_tree(counts: dict[str, int]) -> list[dict[str, Any]]:
     tree: list[dict[str, Any]] = []
     for category in CATEGORIES:
         count = counts.get(category.code)

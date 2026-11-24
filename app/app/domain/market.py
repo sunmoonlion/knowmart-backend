@@ -351,6 +351,7 @@ class FormalUseQuery(Strict):
 
 
 class FormalSelfListingIn(Strict):
+    method_kind: Literal["tool", "expert"] | None = None
     model_config = ConfigDict(str_strip_whitespace=False)
     owner_subject: str = Field(min_length=1, max_length=512)
     reference: FormalReference

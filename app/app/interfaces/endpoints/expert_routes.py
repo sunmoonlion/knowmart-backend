@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.application.services.expert_catalog import CatalogQuery, ExpertCatalog
 from app.bootstrap.knowbots import expert_catalog
 from app.domain.security import Principal
+from app.infrastructure.repositories.market import SqlMarketRepository
 from app.infrastructure.storage.postgres import get_db_session
 from app.interfaces.http.middleware.auth import get_web_current_user
 
@@ -47,6 +48,30 @@ async def experts(
     found = await svc.list(
         principal.subject,
         CatalogQuery(category=category, q=q, updated=updated, sort=sort, page=page),
+    )
+    return JSONResponse(
+        content={"contract_version": CONTRACT_VERSION, **found}, headers=NO_STORE
+    )
+
+
+@router.get("/method-directory")
+async def method_directory(
+    principal: User,
+    svc: Catalog,
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    kind: Literal["expert", "tool"],
+    category: Annotated[str | None, Query(max_length=64, pattern=r"^[a-z_.]+$")] = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    updated: Literal["any", "7d", "30d"] = "any",
+    sort: Literal["updated", "name"] = "updated",
+    page: Annotated[int, Query(ge=1, le=10000)] = 1,
+) -> JSONResponse:
+    """首页：当前用户看得到的专家，按筛选条件筛过、排过、分好页；附类目与数量。"""
+    found = await svc.method_directory(
+        principal.subject,
+        CatalogQuery(category=category, q=q, updated=updated, sort=sort, page=page),
+        kind,
+        SqlMarketRepository(session),
     )
     return JSONResponse(
         content={"contract_version": CONTRACT_VERSION, **found}, headers=NO_STORE

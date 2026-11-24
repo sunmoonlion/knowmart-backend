@@ -307,6 +307,9 @@ class FormalListing(Base):
             "incubation_scope IN ('acquired','platform'))",
             name="ck_formal_incubation_scope",
         ),
+        CheckConstraint(
+            "method_kind IN ('tool','expert')", name="ck_formal_method_kind"
+        ),
         CheckConstraint("version > 0"),
         CheckConstraint("status IN ('pending','listed','withdrawn','rejected')"),
     )
@@ -316,6 +319,7 @@ class FormalListing(Base):
     method_id: Mapped[uuid.UUID] = mapped_column()
     version: Mapped[int] = mapped_column()
     digest: Mapped[str] = mapped_column(String(71))
+    method_kind: Mapped[str | None] = mapped_column(String(8))
     incubation_scope: Mapped[str] = mapped_column(String(12), server_default="none")
     delivery_digest: Mapped[str | None] = mapped_column(String(71))
     scope: Mapped[str] = mapped_column(String(8), server_default="public")

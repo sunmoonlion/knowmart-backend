@@ -45,6 +45,7 @@ class DeliveredSkill(SkillDependency):
 
 
 class DeliveryReceipt(DeliveryDocument):
+    method_kind: Literal["tool", "expert"] | None = None
     contract: Literal["knowbench/formal-method-delivery/v1"]
     owner_subject: str
     reference: FormalReference
@@ -65,7 +66,7 @@ class FormalMethodDelivery:
             requested["skill"] = skill
         status, body = await ServiceClient(relation).request(
             "POST",
-            "/formal-method-delivery",
+            "/formal-method-delivery?include_kind=true",
             json=requested,
             accept=(400, 403, 404, 409, 422),
         )

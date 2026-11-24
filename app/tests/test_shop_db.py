@@ -649,6 +649,7 @@ async def test_platform_incubation_access_tracks_verified_publisher(world):
         svc.formal_delivery = AsyncMock()
         svc.formal_delivery.check.return_value = {
             "title": "Tool",
+            "method_kind": "tool",
             "purpose": "Test",
             "skill_dependencies": [],
             "delivery_digest": "sha256:" + "a" * 64,

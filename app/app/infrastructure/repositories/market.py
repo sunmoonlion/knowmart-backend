@@ -88,6 +88,33 @@ def knowledge_on_market(today: date) -> list[Any]:
     ]
 
 
+def public_formal_listing(today: date):
+    publisher = (
+        select(Publisher.id)
+        .where(
+            Publisher.id == FormalListing.publisher_id,
+            Publisher.review_status == "approved",
+            Publisher.real_name_verified.is_(True),
+        )
+        .exists()
+    )
+    license = (
+        select(PublisherLicense.id)
+        .where(
+            PublisherLicense.publisher_id == FormalListing.publisher_id,
+            PublisherLicense.category == FormalListing.category,
+            license_valid(today),
+        )
+        .exists()
+    )
+    return (
+        (FormalListing.scope == "public")
+        & publisher
+        & ~shop_suspended(FormalListing.owner_subject)
+        & or_(FormalListing.category.not_in(LICENSED), license)
+    )
+
+
 def _id(value: str | uuid.UUID) -> uuid.UUID | None:
     try:
         return value if isinstance(value, uuid.UUID) else uuid.UUID(str(value))
@@ -146,7 +173,85 @@ class SqlMarketRepository:
                 .with_for_update()
             )
         ).scalar_one()
+        if (
+            row.digest == fields["digest"]
+            and row.method_kind is None
+            and fields.get("method_kind")
+        ):
+            row.method_kind = fields["method_kind"]
+            await self.session.flush()
         return _row(row)
+
+    async def catalog_methods(
+        self,
+        viewer,
+        method_kind,
+        *,
+        public,
+        today,
+        words,
+        since,
+        codes,
+        sort,
+        offset,
+        limit,
+    ):
+        visible = (FormalListing.scope == "self") & (
+            FormalListing.owner_subject == viewer
+        )
+        if public:
+            visible = or_(visible, public_formal_listing(today))
+        stmt = (
+            select(
+                FormalListing.method_id,
+                FormalListing.version,
+                FormalListing.digest,
+                FormalListing.title,
+                FormalListing.purpose,
+                FormalListing.category,
+                FormalListing.method_kind,
+                FormalListing.reviewed_at,
+                FormalListing.id,
+            )
+            .distinct(FormalListing.method_id)
+            .where(
+                visible,
+                FormalListing.method_kind == method_kind,
+                FormalListing.status == "listed",
+            )
+            .order_by(
+                FormalListing.method_id,
+                FormalListing.version.desc(),
+                FormalListing.scope,
+                FormalListing.id,
+            )
+        )
+        latest = stmt.subquery()
+        matches = select(latest)
+        if words:
+            matches = matches.where(
+                func.strpos(func.lower(latest.c.title + "\n" + latest.c.purpose), words)
+                > 0
+            )
+        if since:
+            matches = matches.where(latest.c.reviewed_at >= since)
+        found = matches.subquery()
+        grouped = await self.session.execute(
+            select(found.c.category, func.count()).group_by(found.c.category)
+        )
+        counts = {code: n for code, n in grouped}
+        page = select(found)
+        if codes is not None:
+            page = page.where(found.c.category.in_(codes))
+        order = (
+            found.c.title.collate("C")
+            if sort == "name"
+            else found.c.reviewed_at.desc().nulls_last()
+        )
+        result = await self.session.execute(
+            page.order_by(order, found.c.id).offset(offset).limit(limit)
+        )
+        return [dict(row) for row in result.mappings()], counts
 
     async def owner_formal_listings(self, subject, after, limit):
         stmt = select(FormalListing).where(FormalListing.owner_subject == subject)
@@ -222,31 +327,7 @@ class SqlMarketRepository:
         # suspended publishers consume none of this buyer's planning window.
         qualified = FormalListing.scope == "self"
         if public:
-            publisher = (
-                select(Publisher.id)
-                .where(
-                    Publisher.id == FormalListing.publisher_id,
-                    Publisher.review_status == "approved",
-                    Publisher.real_name_verified.is_(True),
-                )
-                .exists()
-            )
-            license = (
-                select(PublisherLicense.id)
-                .where(
-                    PublisherLicense.publisher_id == FormalListing.publisher_id,
-                    PublisherLicense.category == FormalListing.category,
-                    license_valid(today),
-                )
-                .exists()
-            )
-            qualified = or_(
-                qualified,
-                (FormalListing.scope == "public")
-                & publisher
-                & ~shop_suspended(FormalListing.owner_subject)
-                & or_(FormalListing.category.not_in(LICENSED), license),
-            )
+            qualified = or_(qualified, public_formal_listing(today))
         pin = (FormalListing.method_id, FormalListing.version, FormalListing.digest)
         base = select(*pin).where(qualified)
         if references is not None:

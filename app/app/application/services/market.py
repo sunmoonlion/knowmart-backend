@@ -677,6 +677,7 @@ class MarketService:
                     version=ref.version,
                     digest=ref.digest,
                     delivery_digest=None,
+                    method_kind=body.method_kind,
                     scope="self",
                     publisher_id=None,
                     category=DEFAULT_CATEGORY,
@@ -688,7 +689,9 @@ class MarketService:
                     or "automatic self-use review",
                 )
             )
-            if row["digest"] != ref.digest:
+            if row["digest"] != ref.digest or (
+                body.method_kind and row["method_kind"] != body.method_kind
+            ):
                 raise _conflict(
                     "Different frozen self-use version", "formal_listing_conflict"
                 )
@@ -737,6 +740,8 @@ class MarketService:
             await self._qualified(subject, body.category)
         ref = body.reference.model_dump(mode="json")
         ready = await self._formal_version(subject, ref)
+        if ready.get("method_kind") not in ("tool", "expert"):
+            raise BadGatewayError("Missing frozen method classification")
         async with self.repo.transaction():
             await self._open_shop(subject)
             publisher = await self._qualified(subject, body.category)
@@ -749,6 +754,7 @@ class MarketService:
                 delivery_digest=ready["delivery_digest"],
                 title=ready["title"],
                 purpose=ready["purpose"],
+                method_kind=ready["method_kind"],
                 category=body.category,
                 publisher_id=publisher["id"],
                 scope="public",
@@ -757,7 +763,13 @@ class MarketService:
             row = await self.repo.submit_formal_listing(fields)
             if any(
                 row[k] != fields[k]
-                for k in ("digest", "delivery_digest", "category", "publisher_id")
+                for k in (
+                    "digest",
+                    "delivery_digest",
+                    "category",
+                    "publisher_id",
+                    "method_kind",
+                )
             ):
                 raise _conflict(
                     "Listing version already has another review scope",
