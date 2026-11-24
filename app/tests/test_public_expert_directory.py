@@ -7,10 +7,10 @@ from pathlib import Path
 import pytest
 
 from app.domain.knowbots.catalog import expert_sections
-from app.domain.knowbots.directory import public_directory, render
+from app.domain.knowbots.directory import render
 from app.domain.knowbots.manifest import parse_manifest
 from tests.knowbot_fakes import MemoryKnowbots
-from tests.test_expert_catalog import ME, catalog, deliver
+from tests.test_expert_catalog import ME, deliver
 
 
 def test_provider_schema_is_exact():
@@ -50,23 +50,6 @@ async def test_public_snapshot_does_not_truncate_or_leak_private_methods():
             },
         },
     )
-    legacy = await catalog(repo).runtime_catalog(ME, "knowbench")
-    assert len(legacy[0]["scope"]["does"]) == 2000
-    rows = await catalog(repo).runtime_catalog(
-        ME, "knowbench", capability_declarations=True
-    )
-    actual = public_directory(
-        [{**entry, "price": None, "free": True} for entry in rows]
-    )
-    assert actual.complete
-    expert = actual.experts[0]
-    assert expert.scope.does == long_scope
-    assert expert.digest == old.digest
-    assert expert.declaration == "capabilities/v1"
-    assert expert.public_capabilities[0].statement == "分析已授权数据趋势"
-    dumped = actual.model_dump_json()
-    assert "secret" not in dumped and "capability_bindings" not in dumped
-    assert "owned" not in dumped and "method_sources" not in dumped
     detail = expert_sections(repo.versions[key].manifest, owner=False)
     assert {"label": "可完成的任务", "text": "分析已授权数据趋势"} in detail["can_do"]
     assert {"label": "交付成果", "text": "趋势报告"} in detail["can_do"]

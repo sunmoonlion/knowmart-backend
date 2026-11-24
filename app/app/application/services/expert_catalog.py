@@ -63,9 +63,15 @@ def _not_found() -> NotFoundError:
 
 def _seen_by(bot: KnowbotRecord, viewer: str) -> KnowbotRecord:
     """别人看到的只有 knowlab 审成公开的那几版；主人看到全部（Fable 评审 P2-2）。"""
-    if bot.owner_subject == viewer:
-        return bot
-    return replace(bot, versions=tuple(v for v in bot.versions if v.public_allowed))
+    return replace(
+        bot,
+        versions=tuple(
+            v
+            for v in bot.versions
+            if v.manifest.get("schema") == SCHEMA_V3
+            and (bot.owner_subject == viewer or v.public_allowed)
+        ),
+    )
 
 
 def _usable(version: KnowbotVersionRecord, owned: bool) -> bool:
@@ -317,65 +323,6 @@ class ExpertCatalog:
                 "licenses": list(publisher.licenses),
             },
         }
-
-    async def runtime_catalog(
-        self, owner_subject: str, runtime: str, *, capability_declarations: bool = False
-    ) -> list[dict[str, Any]]:
-        """运行方替用户「找专家」时看的（请专家方案设计第 4.9 节第 2 条）：
-        这个用户请得动、
-        运行方是这个调用方的专家，各取最新一版能请的；只给公开信息——名称、一句话、
-        接什么 / 不接什么 / 不接的去哪问（清单的 `pack.scope`）、版本、类目。不排序、
-        不加权：
-        按名称排，匹配由用户自己的模型按专家自述的范围做。"""
-        out: list[dict[str, Any]] = []
-        for bot in await self._visible(owner_subject):
-            owned = bot.owner_subject == owner_subject
-            usable = [
-                v
-                for v in bot.versions
-                if _usable(v, owned)
-                and (owned or v.public_allowed)
-                and v.manifest.get("runtime") == runtime
-            ]
-            if not usable:
-                continue
-            latest = max(usable, key=lambda v: int(v.version))
-            pack = latest.manifest.get("pack")
-            scope = pack.get("scope") if isinstance(pack, dict) else None
-            scope = scope if isinstance(scope, dict) else {}
-            out.append(
-                {
-                    "knowbot_id": str(bot.id),
-                    "name": bot.name,
-                    "tagline": bot.tagline,
-                    "version": latest.version,
-                    "category": bot.category,
-                    "scope": {
-                        k: str(scope.get(k) or "")
-                        if capability_declarations
-                        else str(scope.get(k) or "")[:2000]
-                        for k in ("does", "does_not", "elsewhere")
-                    },
-                    "owned": bot.owner_subject == owner_subject,
-                    **(
-                        {
-                            "digest": latest.digest,
-                            "runtime_contract": (pack or {}).get(
-                                "runtime_contract", "knowbench/fixed/v1"
-                            ),
-                            "public_capabilities": (pack or {}).get(
-                                "public_capabilities", []
-                            ),
-                            "declaration": "capabilities/v1"
-                            if (pack or {}).get("public_capabilities")
-                            else "scope/v1",
-                        }
-                        if capability_declarations
-                        else {}
-                    ),
-                }
-            )
-        return sorted(out, key=lambda e: (e["name"], e["knowbot_id"]))
 
 
 def _gaps(versions: Sequence[KnowbotVersionRecord]) -> list[str]:

@@ -45,6 +45,7 @@ from app.domain.knowbots.catalog import (
     matching_tool_categories,
     suggested_tool_category,
 )
+from app.domain.knowbots.manifest import SCHEMA_V3
 from app.domain.market import (
     DEFAULT_RULES,
     DOCUMENT_KEEP_DAYS,
@@ -1121,9 +1122,10 @@ class MarketService:
                     "at": _iso(v.held_at),
                 }
                 for v in bot.versions
-                if v.status == "held"
+                if v.manifest.get("schema") == SCHEMA_V3 and v.status == "held"
             ]
             for bot in await self.knowbots.list_for_owner(subject)
+            if any(v.manifest.get("schema") == SCHEMA_V3 for v in bot.versions)
         }
         return [
             {
@@ -1132,6 +1134,7 @@ class MarketService:
                 "held": held.get(str(bot["id"]), []),
             }
             for bot in await self.repo.knowbots_of(subject)
+            if str(bot["id"]) in held
         ]
 
     async def record_summon(
@@ -1836,6 +1839,7 @@ class MarketService:
         out = []
         for trade in found:
             review = await self.repo.get_review(trade["id"])
+            state = await self._listing_state(trade)
             out.append(
                 {
                     **trade_view(trade, viewer=subject),
@@ -1844,7 +1848,12 @@ class MarketService:
                     # 不请得到）（第 7 之二小节；直达链接由页面按 kind、granted、
                     # listing_ref 拼）
                     "shop": refs.get(trade["seller_subject"]),
-                    "listing_state": await self._listing_state(trade),
+                    "listing_state": "off" if state == "retired" else state,
+                    **(
+                        {"expert_link_available": state not in ("retired", "revoked")}
+                        if trade["kind"] == "expert"
+                        else {}
+                    ),
                 }
             )
         return out
@@ -1868,8 +1877,10 @@ class MarketService:
         knowbot_id, _, version = str(trade["listing_ref"]).partition("@")
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or not version:
-            return "off"
+            return "retired"
         found = await self.knowbots.get_version(bot["id"], version)
+        if found is None or found.manifest.get("schema") != SCHEMA_V3:
+            return "retired"
         up = (
             self.public_market
             and found is not None

@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.knowbots.catalog import CATEGORIES
+from app.domain.knowbots.manifest import SCHEMA_V3
 from app.infrastructure.models.auth import AuthUser
 from app.infrastructure.models.knowbots import (
     Knowbot,
@@ -874,6 +875,7 @@ class SqlMarketRepository:
                 select(KnowbotVersion.knowbot_id, KnowbotVersion.version).where(
                     KnowbotVersion.knowbot_id.in_([b["id"] for b in bots]),
                     KnowbotVersion.public_allowed.is_(True),
+                    KnowbotVersion.manifest["schema"].astext == SCHEMA_V3,
                     KnowbotVersion.status == "active",
                 )
             )

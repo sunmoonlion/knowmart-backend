@@ -386,12 +386,6 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
         assert missing.status_code == 404
 
 
-class FakeCatalog:
-    async def runtime_catalog(self, owner: str, runtime: str):  # type: ignore[no-untyped-def]
-        assert (owner, runtime) == (OWNER, "knowbench")
-        return [{"knowbot_id": "k1", "version": "2", "owned": False}]
-
-
 class FakeMarket(Summons):
     async def expert_terms(self, buyer, entries):  # type: ignore[no-untyped-def]
         return [{**e, "price": "5.00", "free": False} for e in entries]
@@ -406,23 +400,13 @@ async def test_find_expert_catalog_and_demands_for_the_user(wired) -> None:
     """运行方替用户「找专家」、替他发需求（请专家方案设计第 4.9 节）：按关系认调用方，
     记在这个用户名下。"""
     market = FakeMarket()
-    app.dependency_overrides[knowbot_routes.catalog_for_request] = FakeCatalog
     app.dependency_overrides[knowbot_routes.market_for_request] = lambda: market
     app.dependency_overrides[require_catalog_service] = lambda: _caller("knowbench")
     app.dependency_overrides[require_demand_service] = lambda: _caller("knowbench")
     base = f"/api/internal/v1/knowmart/owners/{OWNER}"
     async with client() as c:
         got = await c.get(f"{base}/catalog")
-        assert got.status_code == 200
-        assert got.json()["experts"] == [
-            {
-                "knowbot_id": "k1",
-                "version": "2",
-                "owned": False,
-                "price": "5.00",
-                "free": False,
-            }
-        ]
+        assert got.status_code == 404
         made = await c.post(
             f"{base}/demands",
             json={

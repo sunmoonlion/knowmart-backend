@@ -404,9 +404,9 @@ async def test_fixed_manifest_cannot_be_delivered_or_summoned_even_if_marked_act
     receipt = await deliver(svc, "delivery-0002", manifest())
     key = (receipt.knowbot_id, "1")
     repo.versions[key] = replace(repo.versions[key], manifest=old)
-    detail = await ExpertCatalog(repo).detail(OWNER, str(receipt.knowbot_id))
-    assert not detail["summonable"]
-    assert detail["sections"]["steps"][0]["title"] == "读财报"
+    for version in (None, "1"):
+        with pytest.raises(NotFoundError):
+            await ExpertCatalog(repo).detail(OWNER, str(receipt.knowbot_id), version)
     with pytest.raises(NotFoundError):
         await svc.summon(
             owner_subject=OWNER,

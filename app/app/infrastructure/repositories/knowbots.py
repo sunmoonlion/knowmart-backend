@@ -24,6 +24,7 @@ from app.application.ports.knowbots import (
     VersionStatus,
 )
 from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
+from app.domain.knowbots.manifest import SCHEMA_V3
 from app.infrastructure.models.knowbots import (
     Knowbot,
     KnowbotUnlistedVersion,
@@ -102,6 +103,7 @@ def public_to_others(today: date):
     shown = exists().where(
         KnowbotVersion.knowbot_id == Knowbot.id,
         KnowbotVersion.public_allowed.is_(True),
+        KnowbotVersion.manifest["schema"].astext == SCHEMA_V3,
     )
     return and_(
         Knowbot.visibility == "public",

@@ -303,19 +303,13 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
 
     async def trade(svc: MarketService, admin: MarketAdmin):
         # 「找专家」看的（decisions 10-29「AI 请专家」）：公开信息、价格、免不免费请
-        async with db() as session:
-            catalog = ExpertCatalog(
-                SqlKnowbotRepository(session), public_market=True, now=lambda: NOW
-            )
-            seen = await catalog.runtime_catalog(BUYER, "knowbench")
-            assert await catalog.runtime_catalog(BUYER, "elsewhere") == []
+        seen = [{"knowbot_id": str(bot), "version": "1", "owned": False}]
         [entry] = await svc.expert_terms(BUYER, seen)
         assert (entry["knowbot_id"], entry["version"], entry["owned"]) == (
             str(bot),
             "1",
             False,
         )
-        assert set(entry["scope"]) == {"does", "does_not", "elsewhere"}
         assert (entry["price"], entry["free"]) == ("9.90", False)
         assert (
             await svc.record_summon(buyer=SELLER, knowbot_id=str(bot), version="1")
@@ -348,8 +342,9 @@ async def test_an_expert_goes_public_after_review_and_others_can_ask_it(
             async with repo.transaction():
                 await repo.hold_version(bot, "1", "binding_deleted", NOW)
             catalog = ExpertCatalog(repo, public_market=True, now=lambda: NOW)
-            assert await catalog.runtime_catalog(BUYER, "knowbench") == []
-            assert len(await catalog.runtime_catalog(SELLER, "knowbench")) == 1
+            with pytest.raises(NotFoundError):
+                await catalog.detail(BUYER, str(bot), "1")
+            assert (await catalog.detail(SELLER, str(bot), "1"))["summonable"]
         [mine] = await svc.my_experts(SELLER)
         assert [(h["version"], h["reason"]) for h in mine["held"]] == [
             ("1", "binding_deleted")

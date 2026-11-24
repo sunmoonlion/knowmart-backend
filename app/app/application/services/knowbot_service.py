@@ -469,4 +469,5 @@ class KnowbotService:
                 "public_allowed": v.public_allowed,
             }
             for v in bot.versions
+            if v.manifest.get("schema") == SCHEMA_V3
         ]
