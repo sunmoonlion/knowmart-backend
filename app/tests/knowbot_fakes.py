@@ -22,7 +22,7 @@ from app.application.services.market import needs_license
 from app.domain.knowbots.catalog import DEFAULT_CATEGORY
 
 
-def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
+def historical_manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
     """合格的清单 v2：逻辑 + 作者挑选的数据（只带冻结的引用）；没有数据需求声明。"""
     doc: dict[str, Any] = {
         "schema": "knowbot-manifest/v2",
@@ -49,6 +49,19 @@ def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
     }
     doc.update(overrides)
     return doc
+
+
+def manifest(version: str = "1", **overrides: Any) -> dict[str, Any]:
+    doc = historical_manifest(version)
+    doc["schema"] = "knowbot-manifest/v3"
+    doc["pack"] = {
+        "pack_id": "fin-forecast",
+        "version": version,
+        "runtime_contract": "knowbench/dynamic-methods/v1",
+        "method_units": [{"contract": {"step_id": "read"}}],
+        "planning": {"method_text": "核对报表"},
+    }
+    return {**doc, **overrides}
 
 
 class MemoryKnowbots:

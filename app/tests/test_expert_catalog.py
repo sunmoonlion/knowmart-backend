@@ -218,7 +218,7 @@ async def test_detail_for_the_owner_shows_steps_and_versions() -> None:
     # 第 2 版停用了：默认给最新的可用版
     assert detail["version"] == "1" and detail["summonable"] is True
     assert [v["version"] for v in detail["versions"]] == ["2", "1"]
-    assert detail["sections"]["steps"] == [{"title": "读财报", "summary": ""}]
+    assert detail["sections"]["steps"] == []  # 动态目录在委托时才确定步骤
     assert detail["publisher"] is None
     stopped = await svc.detail(ME, str(bot), "2")
     assert stopped["version"] == "2" and stopped["summonable"] is False
@@ -263,7 +263,9 @@ async def test_the_detail_writes_what_became_of_versions_never_listed() -> None:
 
 
 def test_sections_read_what_the_manifest_has() -> None:
-    doc = manifest()
+    from tests.knowbot_fakes import historical_manifest
+
+    doc = historical_manifest()
     doc["pack"]["answers"] = {
         "解决什么": "看清走势",
         "不解决什么": "买卖建议",
@@ -290,7 +292,7 @@ def test_sections_read_what_the_manifest_has() -> None:
     assert [s["title"] for s in owner["steps"]] == ["取数", "成稿"]
     assert expert_sections(doc, owner=False)["steps"] is None
     # 没写成稿文件的：交回的是最后一步的结果
-    bare = manifest()
+    bare = historical_manifest()
     assert expert_sections(bare, owner=False)["delivers"] == [
         {"step": "读财报", "file": None}
     ]

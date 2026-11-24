@@ -9,7 +9,7 @@ import pytest
 
 from app.domain.knowbots.manifest import KnowbotManifestV3, parse_manifest
 from app.domain.knowbots.schema import render
-from tests.knowbot_fakes import manifest as fixed_manifest
+from tests.knowbot_fakes import historical_manifest as fixed_manifest
 
 
 def manifest():

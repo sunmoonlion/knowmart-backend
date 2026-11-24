@@ -38,7 +38,7 @@ from app.domain.knowbots.delivery import (
     binding_items,
     binding_problem,
 )
-from app.domain.knowbots.manifest import KnowbotManifest, parse_manifest
+from app.domain.knowbots.manifest import SCHEMA_V3, KnowbotManifest, parse_manifest
 
 DELIVERY_ID = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
 SOURCE_REF = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
@@ -148,6 +148,10 @@ class KnowbotService:
             ) from exc
         digest = parsed.digest()
         prior = await self.repo.find_delivery(delivery_id)
+        if prior is None and parsed.schema_ != SCHEMA_V3:
+            raise BadRequestError(
+                "Fixed v2 expert delivery has been retired", code="fixed_expert_retired"
+            )
         if prior is None:
             await self._check_bindings(owner_subject, parsed, public=request_public)
         async with self.repo.transaction():
@@ -280,7 +284,10 @@ class KnowbotService:
             raise _not_found()
         if bot.owner_subject != owner_subject and not found.public_allowed:
             raise _not_found()  # 审成自用的那一版只给主人（Fable 评审 P2-2）
-        if found.manifest.get("runtime") != runtime:
+        if (
+            found.manifest.get("schema") != SCHEMA_V3
+            or found.manifest.get("runtime") != runtime
+        ):
             raise _not_found()
         return SummonedVersion(
             knowbot_id=bot.id, name=bot.name, tagline=bot.tagline, version=found

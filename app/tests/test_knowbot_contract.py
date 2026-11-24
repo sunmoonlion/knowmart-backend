@@ -11,7 +11,7 @@ import pytest
 
 from app.domain.knowbots.catalog import CATEGORIES, DEFAULT_CATEGORY
 from app.domain.knowbots.schema import render, render_delivery
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import historical_manifest as manifest
 
 CONTRACT_DIR = Path(__file__).resolve().parents[3] / "contracts/knowbot/v2"
 SCHEMA = CONTRACT_DIR / "knowbot-manifest.schema.json"

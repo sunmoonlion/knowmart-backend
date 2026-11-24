@@ -386,3 +386,31 @@ async def test_withdraw_public_clears_public_and_releases_public_only_hold() -> 
     await svc.summon(
         owner_subject=OWNER, knowbot_id=bot_id, version="1", runtime="knowbench"
     )
+
+
+@pytest.mark.asyncio
+async def test_fixed_manifest_cannot_be_delivered_or_summoned_even_if_marked_active():
+    from dataclasses import replace
+
+    from app.application.services.expert_catalog import ExpertCatalog
+    from tests.knowbot_fakes import historical_manifest
+
+    svc, repo = service()
+    old = historical_manifest()
+    with pytest.raises(BadRequestError) as error:
+        await deliver(svc, "delivery-0001", old)
+    assert error.value.code == "fixed_expert_retired"
+    assert not repo.versions
+    receipt = await deliver(svc, "delivery-0002", manifest())
+    key = (receipt.knowbot_id, "1")
+    repo.versions[key] = replace(repo.versions[key], manifest=old)
+    detail = await ExpertCatalog(repo).detail(OWNER, str(receipt.knowbot_id))
+    assert not detail["summonable"]
+    assert detail["sections"]["steps"][0]["title"] == "读财报"
+    with pytest.raises(NotFoundError):
+        await svc.summon(
+            owner_subject=OWNER,
+            knowbot_id=str(receipt.knowbot_id),
+            version="1",
+            runtime="knowbench",
+        )

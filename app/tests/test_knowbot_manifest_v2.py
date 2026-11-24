@@ -11,7 +11,7 @@ from app.domain.knowbots.manifest import (
     manifest_digest,
     parse_manifest,
 )
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import historical_manifest as manifest
 
 NEED = {
     "key": "annual",

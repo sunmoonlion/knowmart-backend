@@ -35,6 +35,7 @@ from app.domain.knowbots.catalog import (
     expert_sections,
     in_category,
 )
+from app.domain.knowbots.manifest import SCHEMA_V3
 
 OWNER = re.compile(r"^[A-Za-z0-9._:@-]{1,512}$")
 VERSION = re.compile(r"^[1-9][0-9]{0,5}$")
@@ -69,7 +70,9 @@ def _seen_by(bot: KnowbotRecord, viewer: str) -> KnowbotRecord:
 
 def _usable(version: KnowbotVersionRecord, owned: bool) -> bool:
     """请得了：在售的；待处理的（所绑数据失效，0043 第 4.3 节）只有主人请得了。"""
-    return version.status == "active" or (owned and version.status == "held")
+    return version.manifest.get("schema") == SCHEMA_V3 and (
+        version.status == "active" or (owned and version.status == "held")
+    )
 
 
 def _latest(bot: KnowbotRecord, owned: bool = False) -> KnowbotVersionRecord | None:
