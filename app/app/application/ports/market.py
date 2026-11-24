@@ -21,6 +21,12 @@ class MarketRepository(Protocol):
 
     async def pending_formal_listings(self, offset: int, limit: int) -> list[Row]: ...
     async def submit_formal_listing(self, fields: Row) -> Row: ...
+    async def directory_labels(
+        self, subject, references, today, public
+    ) -> list[Row]: ...
+
+    async def classify_method(self, row, code) -> None: ...
+
     async def catalog_methods(
         self,
         viewer,
@@ -41,7 +47,9 @@ class MarketRepository(Protocol):
         self, subject, after, limit
     ) -> list[dict[str, Any]]: ...
 
-    async def incubation_listings(self, query) -> list[dict[str, Any]]: ...
+    async def incubation_listings(
+        self, query, today, platform_code
+    ) -> list[dict[str, Any]]: ...
 
     async def usable_formal_pins(
         self,
@@ -50,6 +58,7 @@ class MarketRepository(Protocol):
         today: date,
         public: bool,
         include_acquired: bool,
+        codes: list[str] | None = None,
         references: list[Any] | None = None,
         offset: int = 0,
         limit: int | None = None,

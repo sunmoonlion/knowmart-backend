@@ -323,12 +323,22 @@ class IncubationPermission(Strict):
     scope: Literal["none", "acquired", "platform"]
 
 
+TopicTerms = Annotated[
+    list[Annotated[str, Field(min_length=1, max_length=64)]], Field(max_length=32)
+]
+
+
 class IncubationToolsQuery(Strict):
+    topic_terms: TopicTerms = Field(default_factory=list)
     model_config = ConfigDict(str_strip_whitespace=False)
     subject: str = Field(min_length=1, max_length=512)
     reference: FormalReference | None = None
     after: uuid.UUID | None = None
     limit: int = Field(default=30, strict=True, ge=1, le=100)
+
+
+class MethodCategoryIn(Strict):
+    code: str = Field(min_length=1, max_length=64)
 
 
 class FormalListingIn(Strict):
@@ -337,10 +347,16 @@ class FormalListingIn(Strict):
 
 
 class FormalPlanningWindow(Strict):
+    topic_terms: TopicTerms = Field(default_factory=list)
     model_config = ConfigDict(str_strip_whitespace=False)
     owner_subject: str = Field(min_length=1, max_length=512)
     offset: int = Field(default=0, strict=True, ge=0, le=2147483647)
     limit: int = Field(strict=True, ge=1, le=100)
+
+
+class DirectoryLabels(Strict):
+    owner_subject: str = Field(min_length=1, max_length=512)
+    references: list[FormalReference] = Field(max_length=100)
 
 
 class FormalUseQuery(Strict):

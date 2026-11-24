@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select, tuple_, update
+from sqlalchemy import case, false, func, or_, select, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,6 +33,7 @@ from app.infrastructure.models.market import (
     KnowledgeListing,
     MarketMessage,
     MarketReport,
+    MethodClassification,
     PublisherChange,
     PublisherDocument,
     Shop,
@@ -182,6 +183,99 @@ class SqlMarketRepository:
             await self.session.flush()
         return _row(row)
 
+    @staticmethod
+    def classification_join():
+        return (
+            (MethodClassification.owner_subject == FormalListing.owner_subject)
+            & (MethodClassification.method_id == FormalListing.method_id)
+            & (MethodClassification.version == FormalListing.version)
+            & (MethodClassification.digest == FormalListing.digest)
+        )
+
+    @staticmethod
+    def directory_category():
+        # Public experts display their reviewed business category. Owners can
+        # classify self-use experts without changing any publishing qualification.
+        return case(
+            (
+                FormalListing.method_kind == "tool",
+                func.coalesce(MethodClassification.code, "uncategorized"),
+            ),
+            (
+                FormalListing.scope == "self",
+                func.coalesce(MethodClassification.code, FormalListing.category),
+            ),
+            else_=FormalListing.category,
+        )
+
+    async def directory_labels(self, subject, references, today, public):
+        if not references:
+            return []
+        owner = FormalListing.owner_subject == subject
+        purchased = (
+            select(FormalAcquisition.listing_id)
+            .where(
+                FormalAcquisition.listing_id == FormalListing.id,
+                FormalAcquisition.buyer_subject == subject,
+            )
+            .exists()
+        )
+        visible = owner
+        if public:
+            visible = or_(
+                owner,
+                public_formal_listing(today)
+                & (
+                    (FormalListing.status == "listed")
+                    | ((FormalListing.status == "withdrawn") & purchased)
+                ),
+            )
+        pin = (FormalListing.method_id, FormalListing.version, FormalListing.digest)
+        stmt = (
+            select(
+                *pin,
+                FormalListing.method_kind,
+                self.directory_category().label("category"),
+            )
+            .outerjoin(MethodClassification, self.classification_join())
+            .where(
+                visible,
+                tuple_(*pin).in_(
+                    [(r.method_id, r.version, r.digest) for r in references]
+                ),
+            )
+            .distinct(*pin)
+            .order_by(
+                *pin,
+                case(
+                    (
+                        (FormalListing.status == "listed")
+                        & (public_formal_listing(today) if public else false()),
+                        0,
+                    ),
+                    (
+                        (FormalListing.status == "listed")
+                        & (FormalListing.scope == "self"),
+                        1,
+                    ),
+                    else_=2,
+                ),
+                FormalListing.scope,
+                FormalListing.id,
+            )
+        )
+        return [dict(r) for r in (await self.session.execute(stmt)).mappings()]
+
+    async def classify_method(self, row, code):
+        values = {
+            k: row[k] for k in ("owner_subject", "method_id", "version", "digest")
+        }
+        await self.session.execute(
+            pg_insert(MethodClassification)
+            .values(**values, code=code)
+            .on_conflict_do_update(index_elements=list(values), set_={"code": code})
+        )
+
     async def catalog_methods(
         self,
         viewer,
@@ -208,7 +302,7 @@ class SqlMarketRepository:
                 FormalListing.digest,
                 FormalListing.title,
                 FormalListing.purpose,
-                FormalListing.category,
+                self.directory_category().label("category"),
                 FormalListing.method_kind,
                 FormalListing.reviewed_at,
                 FormalListing.id,
@@ -226,6 +320,7 @@ class SqlMarketRepository:
                 FormalListing.id,
             )
         )
+        stmt = stmt.outerjoin(MethodClassification, self.classification_join())
         latest = stmt.subquery()
         matches = select(latest)
         if words:
@@ -254,13 +349,17 @@ class SqlMarketRepository:
         return [dict(row) for row in result.mappings()], counts
 
     async def owner_formal_listings(self, subject, after, limit):
-        stmt = select(FormalListing).where(FormalListing.owner_subject == subject)
+        stmt = (
+            select(FormalListing, MethodClassification.code)
+            .outerjoin(MethodClassification, self.classification_join())
+            .where(FormalListing.owner_subject == subject)
+        )
         if after:
             stmt = stmt.where(FormalListing.id > after)
-        rows = await self.session.scalars(
+        rows = await self.session.execute(
             stmt.order_by(FormalListing.id).limit(limit + 1)
         )
-        return [_row(row) for row in rows]
+        return [{**_row(row), "tool_category": code} for row, code in rows]
 
     async def author_incubation_listings(self, subject, after, limit):
         stmt = select(FormalListing).where(
@@ -280,7 +379,7 @@ class SqlMarketRepository:
             )
         ]
 
-    async def incubation_listings(self, query):
+    async def incubation_listings(self, query, today, platform_code):
         acquired = (
             select(FormalAcquisition.listing_id)
             .where(
@@ -298,6 +397,23 @@ class SqlMarketRepository:
                 (FormalListing.incubation_scope == "acquired") & acquired,
             ),
         )
+        # Apply every public and platform qualification before paging grants.
+        platform = (
+            select(Publisher.id)
+            .where(
+                Publisher.id == FormalListing.publisher_id,
+                Publisher.kind == "organization",
+                func.upper(Publisher.credit_code) == platform_code.strip().upper(),
+            )
+            .exists()
+        )
+        stmt = stmt.where(
+            public_formal_listing(today),
+            or_(
+                FormalListing.incubation_scope != "platform",
+                platform if platform_code.strip() else false(),
+            ),
+        )
         if query.after:
             stmt = stmt.where(FormalListing.id > query.after)
         if query.reference:
@@ -307,6 +423,14 @@ class SqlMarketRepository:
                 FormalListing.version == ref.version,
                 FormalListing.digest == ref.digest,
             )
+        if query.topic_terms:
+            ranked = stmt.add_columns(MethodClassification.code).outerjoin(
+                MethodClassification, self.classification_join()
+            )
+            result = await self.session.execute(
+                ranked.order_by(FormalListing.id).limit(query.limit + 1)
+            )
+            return [{**_row(row), "tool_category": code} for row, code in result]
         rows = await self.session.scalars(
             stmt.order_by(FormalListing.id).limit(query.limit + 1)
         )
@@ -319,6 +443,7 @@ class SqlMarketRepository:
         today,
         public,
         include_acquired,
+        codes=None,
         references=None,
         offset=0,
         limit=None,
@@ -330,6 +455,10 @@ class SqlMarketRepository:
             qualified = or_(qualified, public_formal_listing(today))
         pin = (FormalListing.method_id, FormalListing.version, FormalListing.digest)
         base = select(*pin).where(qualified)
+        if codes is not None:
+            base = base.join(MethodClassification, self.classification_join()).where(
+                MethodClassification.code.in_(codes)
+            )
         if references is not None:
             base = base.where(
                 tuple_(*pin).in_(

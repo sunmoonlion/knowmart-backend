@@ -30,6 +30,7 @@ from app.domain.knowbots.delivery import KnowbotDeliveryV1
 from app.domain.knowbots.directory import public_directory
 from app.domain.market import (
     DemandIn,
+    DirectoryLabels,
     FormalDeliveryIn,
     FormalPlanningWindow,
     FormalSelfListingIn,
@@ -419,6 +420,17 @@ async def incubation_tools(
     if caller.caller != "knowbench":
         raise ForbiddenError("KnowBench runtime required")
     return JSONResponse(await svc.incubation_tools(body), headers=NO_STORE)
+
+
+@internal_router.post("/formal-methods/directory-labels")
+async def formal_directory_labels(
+    caller: Annotated[ServiceCaller, Depends(require_summon_service)],
+    body: DirectoryLabels,
+    svc: Annotated[MarketService, Depends(market_for_request)],
+):
+    if caller.caller != "knowbench":
+        raise ForbiddenError("KnowBench runtime required")
+    return JSONResponse(await svc.directory_labels(body), headers=NO_STORE)
 
 
 @internal_router.post("/formal-methods/planning-window")

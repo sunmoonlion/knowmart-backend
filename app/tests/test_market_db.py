@@ -1678,7 +1678,39 @@ async def test_typed_catalog_uses_frozen_kind_and_visible_listings(world):
 
         tools = await read(SELLER, "tool")
         assert [r["reference"]["version"] for r in tools["items"]] == [2]
-        assert tools["categories"] == []
+        assert tools["categories"][0]["group"] == "uncategorized"
+        listing_id = tools["items"][0]["listing_id"]
+        with pytest.raises(NotFoundError):
+            await svc.classify_method(OTHER, listing_id, "results.aggregate")
+        await svc.classify_method(SELLER, listing_id, "results.aggregate")
+        from app.domain.market import DirectoryLabels, FormalPlanningWindow
+
+        query = FormalPlanningWindow(
+            owner_subject=SELLER, limit=10, topic_terms=["汇总"]
+        )
+        assert (await svc.planning_window(query))["references"] == [
+            tools["items"][0]["reference"]
+        ]
+        assert not (
+            await svc.planning_window(query.model_copy(update={"owner_subject": OTHER}))
+        )["references"]
+        for who, expected in [(SELLER, 1), (OTHER, 0)]:
+            tags = await svc.directory_labels(
+                DirectoryLabels(
+                    owner_subject=who, references=[tools["items"][0]["reference"]]
+                )
+            )
+            assert len(tags["items"]) == expected
+            assert {c["group"] for c in tags["categories"]["tool"]} >= {
+                "results",
+                "financial",
+            }
+        assert (await read(SELLER, "tool", "results"))["total"] == 1
+        assert (await read(SELLER, "tool", "results.aggregate"))["items"][0][
+            "category"
+        ]["name"] == "汇总与报告"
+        assert (await read(SELLER, "tool", "financial"))["total"] == 0
+        assert (await read(SELLER, "expert", "results"))["total"] == 0
         assert (await read(OTHER, "tool"))["total"] == 0
         experts = await read(SELLER, "expert", "uncategorized")
         assert experts["total"] == experts["categories"][0]["count"] == 1
@@ -1687,6 +1719,14 @@ async def test_typed_catalog_uses_frozen_kind_and_visible_listings(world):
         )
         assert (await read(SELLER, "expert", "finance"))["total"] == 0
 
+        await svc.classify_method(
+            SELLER, experts["items"][0]["listing_id"], "analysis.statements"
+        )
+        assert (await read(SELLER, "expert", "analysis"))["total"] == 1
+        expert_tags = await svc.directory_labels(
+            DirectoryLabels(owner_subject=SELLER, references=[expert.reference])
+        )
+        assert expert_tags["items"][0]["category"] == "analysis.statements"
         for number in range(26):
             await svc.submit_formal_self(listed(f"report {number:02}", "expert"))
         pages = [

@@ -36,8 +36,14 @@ from app.application.ports.market import KnowledgeVault, MarketRepository, Row
 from app.domain.knowbots.catalog import (
     BY_CODE,
     DEFAULT_CATEGORY,
+    EXPERT_DIRECTORY_BY_CODE,
+    EXPERT_DIRECTORY_CATEGORIES,
+    TOOL_BY_CODE,
+    TOOL_CATEGORIES,
     category_view,
     in_category,
+    matching_tool_categories,
+    suggested_tool_category,
 )
 from app.domain.market import (
     DEFAULT_RULES,
@@ -580,11 +586,39 @@ class MarketService:
         async with self.repo.transaction():
             rows = await self.repo.owner_formal_listings(subject, after, limit)
             return {
+                "directory_categories": {
+                    kind: [category_view(c.code, tool=kind == "tool") for c in choices]
+                    for kind, choices in (
+                        ("tool", TOOL_CATEGORIES),
+                        ("expert", EXPERT_DIRECTORY_CATEGORIES),
+                    )
+                },
                 "items": [
                     {
                         "listing_id": str(row["id"]),
                         "reference": formal_ref(row),
                         "title": row["title"],
+                        "suggested_category": suggested_tool_category(
+                            row["title"], row["purpose"]
+                        )
+                        if row.get("method_kind") == "tool"
+                        and not row.get("tool_category")
+                        else None,
+                        "method_kind": row.get("method_kind"),
+                        "editable_category": (
+                            row.get("tool_category")
+                            or (
+                                row["category"]
+                                if row.get("method_kind") == "expert"
+                                else DEFAULT_CATEGORY
+                            )
+                        )
+                        if row.get("method_kind") == "tool"
+                        or (
+                            row.get("method_kind") == "expert"
+                            and row["scope"] == "self"
+                        )
+                        else None,
                         "scope": row["scope"],
                         "status": row["status"],
                     }
@@ -592,6 +626,61 @@ class MarketService:
                 ],
                 "next": str(rows[limit - 1]["id"]) if len(rows) > limit else None,
             }
+
+    async def directory_labels(self, body):
+        async with self.repo.transaction():
+            rows = await self.repo.directory_labels(
+                body.owner_subject,
+                body.references,
+                self.now().date(),
+                self.public_market,
+            )
+        return {
+            "subject": body.owner_subject,
+            "categories": {
+                kind: [category_view(c.code, tool=kind == "tool") for c in choices]
+                for kind, choices in (
+                    ("tool", TOOL_CATEGORIES),
+                    ("expert", EXPERT_DIRECTORY_CATEGORIES),
+                )
+            },
+            "items": [
+                {
+                    "reference": formal_ref(row),
+                    "kind": row["method_kind"],
+                    "category": category_view(
+                        row["category"] or DEFAULT_CATEGORY,
+                        tool=row["method_kind"] == "tool",
+                    )["code"],
+                }
+                for row in rows
+                if row["method_kind"] in ("tool", "expert")
+            ],
+        }
+
+    async def classify_method(self, subject, listing_id, code):
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id)
+            if (
+                not row
+                or row["owner_subject"] != subject
+                or not (
+                    row["method_kind"] == "tool"
+                    or (row["method_kind"] == "expert" and row["scope"] == "self")
+                )
+            ):
+                raise _missing("formal_listing")
+            choices = (
+                TOOL_BY_CODE
+                if row["method_kind"] == "tool"
+                else EXPERT_DIRECTORY_BY_CODE
+            )
+            if code not in choices:
+                raise BadRequestError(
+                    "Unknown method category", code="category_invalid"
+                )
+            await self.repo.classify_method(row, code)
+            return {"code": code}
 
     async def author_incubation_listings(self, subject, after, limit=30):
         async with self.repo.transaction():
@@ -637,23 +726,26 @@ class MarketService:
 
     async def incubation_tools(self, query):
         async with self.repo.transaction():
-            rows = await self.repo.incubation_listings(query)
+            rows = (
+                await self.repo.incubation_listings(
+                    query, self.now().date(), self.platform_credit_code
+                )
+                if self.public_market
+                else []
+            )
             items = []
+            codes = matching_tool_categories(query.topic_terms)
             for row in rows[: query.limit]:
-                try:
-                    await self._formal_qualified(row)
-                except NotFoundError:
-                    continue
-                if row["incubation_scope"] == "platform" and not is_platform(
-                    await self.repo.get_publisher(str(row["publisher_id"])),
-                    self.platform_credit_code,
-                ):
-                    continue
                 items.append(
                     {
                         "owner_subject": row["owner_subject"],
                         "reference": formal_ref(row),
                         "scope": row["incubation_scope"],
+                        **(
+                            {"topic_hit": row.get("tool_category") in codes}
+                            if query.topic_terms
+                            else {}
+                        ),
                         "listing_id": str(row["id"]),
                     }
                 )
@@ -722,6 +814,9 @@ class MarketService:
                 today=self.now().date(),
                 public=self.public_market,
                 include_acquired=True,
+                codes=matching_tool_categories(query.topic_terms)
+                if query.topic_terms
+                else None,
                 offset=query.offset,
                 limit=query.limit + 1,
             )

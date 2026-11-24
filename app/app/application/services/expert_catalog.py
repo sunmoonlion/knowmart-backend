@@ -29,6 +29,8 @@ from app.domain.knowbots.catalog import (
     BY_CODE,
     CATEGORIES,
     DEFAULT_CATEGORY,
+    EXPERT_DIRECTORY_CATEGORIES,
+    TOOL_CATEGORIES,
     category_view,
     expert_sections,
     in_category,
@@ -172,8 +174,14 @@ class ExpertCatalog:
         now = self.now()
         window = UPDATED_WITHIN.get(query.updated)
         codes = (
-            [c.code for c in CATEGORIES if in_category(c.code, query.category)]
-            if kind == "expert" and query.category
+            [
+                c.code
+                for c in (
+                    TOOL_CATEGORIES if kind == "tool" else EXPERT_DIRECTORY_CATEGORIES
+                )
+                if query.category in (c.code, c.group)
+            ]
+            if query.category
             else None
         )
         rows, formal_counts = await market.catalog_methods(
@@ -205,7 +213,7 @@ class ExpertCatalog:
                     "method_kind": row["method_kind"],
                     "name": row["title"],
                     "tagline": row["purpose"],
-                    "category": category_view(row["category"]),
+                    "category": category_view(row["category"], tool=kind == "tool"),
                     "updated_at": stamp.isoformat() if stamp else "",
                 }
             )
@@ -220,7 +228,10 @@ class ExpertCatalog:
         return {
             "items": chosen[local_start : local_start + PAGE_SIZE],
             "total": total,
-            "categories": category_tree(counts) if kind == "expert" else [],
+            "categories": category_tree(
+                counts,
+                TOOL_CATEGORIES if kind == "tool" else EXPERT_DIRECTORY_CATEGORIES,
+            ),
             "page_size": PAGE_SIZE,
             "page": query.page,
         }
@@ -383,9 +394,11 @@ def _category_tree(bots: Sequence[KnowbotRecord]) -> list[dict[str, Any]]:
     )
 
 
-def category_tree(counts: dict[str, int]) -> list[dict[str, Any]]:
+def category_tree(
+    counts: dict[str, int], categories=CATEGORIES
+) -> list[dict[str, Any]]:
     tree: list[dict[str, Any]] = []
-    for category in CATEGORIES:
+    for category in categories:
         count = counts.get(category.code)
         if not count:
             continue

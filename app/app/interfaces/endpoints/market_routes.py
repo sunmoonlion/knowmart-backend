@@ -26,6 +26,7 @@ from app.domain.market import (
     KnowledgeListingIn,
     LicenseIn,
     MessageIn,
+    MethodCategoryIn,
     OfferIn,
     PublisherIn,
     ReplyIn,
@@ -589,6 +590,13 @@ async def permit_incubation(
     principal: User, listing_id: UUID, body: IncubationPermission, svc: Service
 ):
     return ok(await svc.permit_incubation(principal.subject, listing_id, body))
+
+
+@web_router.put("/formal-methods/listings/{listing_id}/directory-category")
+async def classify_method(
+    principal: User, listing_id: UUID, body: MethodCategoryIn, svc: Service
+):
+    return ok(await svc.classify_method(principal.subject, listing_id, body.code))
 
 
 @web_router.delete("/formal-methods/listings/{listing_id}")

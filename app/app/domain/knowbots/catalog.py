@@ -52,14 +52,80 @@ CATEGORIES: tuple[Category, ...] = (
     # 没选类目的（所有者 2026-10-18 采纳审读第 6 条）：不能公开，排在最后
     Category("uncategorized", "uncategorized", "未分类", "未分类"),
 )
+# Capability facets are independent of publisher licences and market categories.
+EXPERT_DIRECTORY_CATEGORIES = (
+    *CATEGORIES[:-1],
+    Category("analysis.statements", "analysis", "财务分析", "报表核验"),
+    Category("analysis.operations", "analysis", "财务分析", "经营分析"),
+    Category("analysis.forecast", "analysis", "财务分析", "预测与估值"),
+    CATEGORIES[-1],
+)
+EXPERT_DIRECTORY_BY_CODE = {c.code: c for c in EXPERT_DIRECTORY_CATEGORIES}
+
+TOOL_CATEGORIES = (
+    Category("financial.reconciliation", "financial", "财务核验", "报表勾稽"),
+    Category("financial.ratios", "financial", "财务核验", "指标计算"),
+    Category("data.lookup", "data", "数据处理", "查询与提取"),
+    Category("data.transform", "data", "数据处理", "清洗与转换"),
+    Category("data.validation", "data", "数据处理", "校验与比对"),
+    Category("results.aggregate", "results", "结果处理", "汇总与报告"),
+    CATEGORIES[-1],
+)
+# Examples are search vocabulary, never publishing qualifications.
+TOOL_TERMS = {
+    "financial.reconciliation": (
+        "报表勾稽",
+        "资产负债平衡",
+        "净利润归属",
+        "现金及现金等价物滚动",
+        "期初余额连续性",
+    ),
+    "financial.ratios": ("指标计算", "利润率", "周转率", "资产回报率"),
+    "data.lookup": ("数据查询", "字段提取", "信息检索"),
+    "data.transform": ("单位换算", "格式转换", "数据清洗"),
+    "data.validation": ("格式校验", "一致性比对", "查重"),
+    "results.aggregate": ("结果汇总", "汇总报告", "报告生成"),
+}
+
+
+def matching_tool_categories(terms):
+    return [
+        c.code
+        for c in TOOL_CATEGORIES
+        if c.code != "uncategorized"
+        and any(
+            term in " ".join((c.group_name, c.name, c.code, *TOOL_TERMS[c.code]))
+            for term in terms
+        )
+    ]
+
+
+def suggested_tool_category(title, purpose):
+    # Use a specific phrase from the author's own description. Ambiguous
+    # matches are left for the author and never become a public classification.
+    for field in (title, purpose):
+        hits = [
+            code
+            for code, phrases in TOOL_TERMS.items()
+            if any(word in field for word in phrases)
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            break
+    return None
+
+
+TOOL_BY_CODE = {c.code: c for c in TOOL_CATEGORIES}
 BY_CODE = {c.code: c for c in CATEGORIES}
 GROUPS = tuple(dict.fromkeys(c.group for c in CATEGORIES))
 # knowlab 交付时由运营选类目（0032 待定第一项）；没选的记未分类，不默认成投资咨询
 DEFAULT_CATEGORY = "uncategorized"
 
 
-def category_view(code: str) -> dict[str, str]:
-    category = BY_CODE.get(code) or BY_CODE[DEFAULT_CATEGORY]
+def category_view(code: str, *, tool=False) -> dict[str, str]:
+    choices = TOOL_BY_CODE if tool else EXPERT_DIRECTORY_BY_CODE
+    category = choices.get(code) or choices[DEFAULT_CATEGORY]
     return {
         "code": category.code,
         "name": category.name,

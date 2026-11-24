@@ -286,6 +286,15 @@ class ShopEvent(Base):
     )
 
 
+class MethodClassification(Base):
+    __tablename__ = "formal_method_classification"
+    method_id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
+    version: Mapped[int] = mapped_column(primary_key=True)
+    digest: Mapped[str] = mapped_column(String(71), primary_key=True)
+    owner_subject: Mapped[str] = mapped_column(String(512), primary_key=True)
+    code: Mapped[str] = mapped_column(String(64))
+
+
 class FormalListing(Base):
     __tablename__ = "formal_method_listing"
     __table_args__ = (
