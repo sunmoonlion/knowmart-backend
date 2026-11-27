@@ -140,7 +140,7 @@ async def stop_delivered_version(
     knowbot_id: Annotated[str, Path(max_length=64)],
     version: Annotated[str, Path(max_length=16)],
 ) -> Response:
-    """knowlab 停用某一版（那边用户或运营停的，SDD 0037 第十八之二节）。
+    """同步 KnowLab 运营对交付版本的停用操作。
 
     服务关系同交付；只认这个所有者的，别人的与没有的都是 404；停过的再停照样 204。
     """
@@ -290,11 +290,7 @@ async def stop_version(
     knowbot_id: Annotated[str, Path(max_length=64)],
     version: Annotated[str, Path(max_length=16)],
 ) -> Response:
-    """停用某一版：之后请不了；已经请去在跑的不受影响。
-
-    knowlab 交来的专家回 409 `stop_in_knowlab`：到 knowlab 的「专家」里停
-    （SDD 0037 第六节）。
-    """
+    """所有者停用市场本地版本。"""
     await svc.stop(
         owner_subject=session.principal.subject, knowbot_id=knowbot_id, version=version
     )

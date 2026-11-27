@@ -347,8 +347,7 @@ class ExpertCatalog:
                 {"version": number, "outcome": outcomes.get(number)}
                 for number in _gaps(bot.versions)
             ],
-            # 停用在哪儿做：knowlab 交来的到 knowlab 停（两边一生记在一处）
-            "stop_in": "knowlab" if bot.source_ref.startswith(KNOWLAB_REF) else "here",
+            "can_stop_here": owned and not bot.source_ref.startswith(KNOWLAB_REF),
             "sections": expert_sections(selected.manifest, owner=owned),
             "publisher": None
             if publisher is None

@@ -280,7 +280,8 @@ async def test_knowlab_experts_are_not_stopped_here(wired) -> None:
         url = f"/api/web/v1/knowbots/{knowbot}/versions/1/stop"
         refused = await c.post(url, headers={"Origin": ORIGIN, "X-CSRF-Token": CSRF})
         assert (
-            refused.status_code == 409 and refused.json()["code"] == "stop_in_knowlab"
+            refused.status_code == 409
+            and refused.json()["code"] == "owner_stop_unavailable"
         )
 
 

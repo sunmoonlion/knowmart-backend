@@ -155,7 +155,7 @@ async def test_knowlab_experts_are_stopped_only_by_knowlab() -> None:
     bot_id = str(result.knowbot_id)
     with pytest.raises(ConcurrencyConflictError) as refused:
         await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1")
-    assert refused.value.code == "stop_in_knowlab"
+    assert refused.value.code == "owner_stop_unavailable"
     await svc.stop(owner_subject=OWNER, knowbot_id=bot_id, version="1", by_knowlab=True)
     [bot] = await svc.repo.list_for_owner(OWNER)
     assert bot.versions[0].status == "stopped"

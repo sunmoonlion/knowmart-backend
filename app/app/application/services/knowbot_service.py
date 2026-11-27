@@ -328,13 +328,7 @@ class KnowbotService:
         version: str,
         by_knowlab: bool = False,
     ) -> None:
-        """停用某一版。
-
-        knowlab 交来的专家，一生（含停用）记在 knowlab（SDD 0037 第六节），只认
-        knowlab 来停；用户在这里点的回 409 `stop_in_knowlab`，页面带他去 knowlab，
-        免得两边对不上。knowlab 来停的也只能停 knowlab 交来的，别的当没有（Kimi 评审
-        第 1 条）。
-        """
+        """所有者可停用市场本地版本。KnowLab 交付的版本由 KnowLab 内部接口同步停用。"""
         async with self.repo.transaction():
             bot = await self._owned(owner_subject, knowbot_id)
             from_knowlab = bot.source_ref.startswith(KNOWLAB_REF)
@@ -342,7 +336,8 @@ class KnowbotService:
                 raise _not_found()
             if not by_knowlab and from_knowlab:
                 raise ConcurrencyConflictError(
-                    "Stop this version in knowlab", code="stop_in_knowlab"
+                    "Owner stop is unavailable for this version",
+                    code="owner_stop_unavailable",
                 )
             if not VERSION.fullmatch(version or ""):
                 raise _not_found()
