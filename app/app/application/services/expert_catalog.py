@@ -209,8 +209,22 @@ class ExpertCatalog:
             n for code, n in formal_counts.items() if codes is None or code in codes
         )
         counts.update(formal_counts)
+        owner_subjects = [
+            row["owner_subject"]
+            for row in rows
+            if isinstance(row.get("owner_subject"), str)
+        ]
+        shops = (
+            await market.shops_of(owner_subjects)
+            if owner_subjects and hasattr(market, "shops_of")
+            else {}
+        )
         for row in rows:
             stamp = row["reviewed_at"]
+            owner_sub = row.get("owner_subject")
+            shop_row = shops.get(owner_sub) if owner_sub else None
+            raw_price = row.get("price")
+            raw_contract = row.get("public_contract") or {}
             chosen.append(
                 {
                     "listing_id": str(row["id"]),
@@ -224,6 +238,28 @@ class ExpertCatalog:
                     "tagline": row["purpose"],
                     "category": category_view(row["category"], tool=kind == "tool"),
                     "updated_at": stamp.isoformat() if stamp else "",
+                    "scope": row.get("scope") or "public",
+                    "owned": bool(owner_sub == viewer) if owner_sub else False,
+                    "acquired": bool(row.get("acquired")),
+                    "price": None if raw_price is None else f"{raw_price:.2f}",
+                    "shop": (
+                        {"shop_id": str(shop_row["id"]), "name": shop_row["name"]}
+                        if shop_row
+                        else None
+                    ),
+                    "public_contract": {
+                        "public_inputs": list(raw_contract.get("public_inputs") or []),
+                        "what_to_return": list(
+                            raw_contract.get("what_to_return") or []
+                        ),
+                        "v0_check_kinds": list(
+                            raw_contract.get("v0_check_kinds") or []
+                        ),
+                        "has_blind_review": bool(raw_contract.get("has_blind_review")),
+                        "per_action_approval_count": int(
+                            raw_contract.get("per_action_approval_count") or 0
+                        ),
+                    },
                 }
             )
         chosen.sort(key=lambda item: item.get("listing_id") or item.get("knowbot_id"))

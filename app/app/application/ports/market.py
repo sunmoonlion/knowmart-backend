@@ -75,6 +75,25 @@ class MarketRepository(Protocol):
     async def has_formal_acquisition(
         self, listing_id: uuid.UUID, buyer: str
     ) -> bool: ...
+    async def formal_versions_of_method(
+        self,
+        owner_subject: str,
+        method_id: uuid.UUID,
+        viewer: str,
+        *,
+        public: bool,
+        today: date,
+    ) -> list[Row]: ...
+    async def public_formal_listings_of_owner(
+        self, owner: str, today: date
+    ) -> list[Row]: ...
+    async def public_formal_by_publisher(
+        self, publisher_id: uuid.UUID, category: str | None
+    ) -> list[Row]: ...
+    async def formal_listing_by_pin(
+        self, owner_subject: str, method_id: uuid.UUID, version: int, *, scope: str
+    ) -> Row | None: ...
+    async def trades_for_formal(self, method_ref_prefix: str) -> list[Row]: ...
 
     # 发布主体与资质
     async def publisher_of(self, subject: str) -> Row | None: ...

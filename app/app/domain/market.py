@@ -20,11 +20,12 @@ import uuid
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Kind = Literal["expert", "knowledge"]
+OfferKind = Literal["expert", "knowledge", "formal_expert", "formal_tool"]
 ListingStatus = Literal[
     "draft", "pending", "listed", "rejected", "delisted", "taken_down"
 ]
@@ -180,7 +181,7 @@ class DemandIn(Strict):
 class ResponseIn(Strict):
     """卖家响应需求：附自己已有的条目（可不附）、方案、报价、多久。"""
 
-    listing_kind: Kind | None = None
+    listing_kind: OfferKind | None = None
     listing_ref: str | None = Field(default=None, min_length=1, max_length=128)
     proposal: str = Field(min_length=1, max_length=4000)
     price: Decimal | None = None
@@ -198,7 +199,7 @@ class ResponseIn(Strict):
 class OfferIn(Strict):
     """被选中的卖家补附的条目（Fable 评审 P2-9）。"""
 
-    listing_kind: Kind
+    listing_kind: OfferKind
     listing_ref: str = Field(min_length=1, max_length=128)
 
 
@@ -216,7 +217,9 @@ class ReplyIn(Strict):
 
 
 class ReportIn(Strict):
-    target_kind: Literal["expert", "knowledge", "demand", "response", "message"]
+    target_kind: Literal[
+        "expert", "formal_method", "knowledge", "demand", "response", "message"
+    ]
     target_id: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=2000)
 
@@ -296,10 +299,41 @@ def default_shop_name(nickname: str | None) -> str:
     return name
 
 
+_CLAUSE_SPLIT = re.compile(r"[。！？；!?;，,\n\r]+")
+_NEGATION_PREFIX = re.compile(
+    r"(?:不做|不作|不提供|不涉及|不含|不包含|不给出|不构成|不进行|不出具|禁止|不得|严禁|拒绝|无)"
+)
+_DOUBLE_NEGATION = re.compile(r"(?:并非不|不是不|绝非不|不能不)")
+_ADVERSATIVE = re.compile(r"(?:但|但是|却|而是|不过)")
+
+
+def _negated_in_clause(clause: str, word: str) -> bool:
+    pos = 0
+    found = False
+    while True:
+        idx = clause.find(word, pos)
+        if idx < 0:
+            break
+        found = True
+        prefix = clause[:idx]
+        neg_matches = list(_NEGATION_PREFIX.finditer(prefix))
+        if not neg_matches or _DOUBLE_NEGATION.search(prefix):
+            return False
+        after_last_neg = prefix[neg_matches[-1].end() :]
+        if _ADVERSATIVE.search(after_last_neg):
+            return False
+        pos = idx + len(word)
+    return found
+
+
 def flagged(*texts: str) -> list[str]:
-    """条目里出现的禁止类词（C-L5），给运营审核时看；不自动拒。"""
-    joined = "\n".join(texts)
-    return [w for w in FLAGGED_WORDS if w in joined]
+    """条目里出现的禁止类词（C-L5），给运营审核时看；否定免责子句不误报。"""
+    clauses = [c.strip() for c in _CLAUSE_SPLIT.split("\n".join(texts)) if c.strip()]
+    return [
+        w
+        for w in FLAGGED_WORDS
+        if any(w in c and not _negated_in_clause(c, w) for c in clauses)
+    ]
 
 
 def demand_open(status: str, deadline: date, today: date) -> bool:
@@ -344,6 +378,10 @@ class MethodCategoryIn(Strict):
 class FormalListingIn(Strict):
     reference: FormalReference
     category: str = Field(min_length=1, max_length=64)
+    directory_category: str | None = Field(default=None, min_length=1, max_length=64)
+    price: Decimal | None = None
+
+    _check_price = field_validator("price")(_price)
 
 
 class FormalPlanningWindow(Strict):
@@ -376,6 +414,8 @@ class FormalSelfListingIn(Strict):
     review_findings: list[Literal["outputs_missing", "flagged_word"]] = Field(
         max_length=2
     )
+    public_contract: dict[str, Any] = Field(default_factory=dict)
+    directory_category: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class FormalDeliveryIn(Strict):

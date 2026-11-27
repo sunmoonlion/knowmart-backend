@@ -63,6 +63,7 @@ def test_one_linear_canonical_migration_chain() -> None:
         "20261122_0018_formal_buyer_lookup.py",
         "20261124_0019_formal_method_kind.py",
         "20261124_0020_method_classification.py",
+        "20261126_0021_formal_market_unification.py",
     ]
     contents = [path.read_text() for path in revisions]
     assert 'down_revision = "20261101_0014"' in contents[14]

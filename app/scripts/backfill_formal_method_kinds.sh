@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 # Run with two libpq service names. The first connection only reads registration metadata.
+# W08 hardened: strict verification applies to active ('listed', 'pending') listings while
+# isolated historical ('withdrawn', 'rejected', 'taken_down') rows emit a warning instead of
+# aborting the entire table backfill.
 set -euo pipefail
 if [[ $# != 2 ]]; then
   echo "usage: $0 KNOWBENCH_READ_SERVICE KNOWMART_MIGRATION_SERVICE" >&2
@@ -33,15 +36,27 @@ SQL
   cat "$snapshot"
   cat <<'SQL'
 \.
-LOCK TABLE formal_method_listing IN SHARE ROW EXCLUSIVE MODE;
 DO $$
+DECLARE
+  orphan_historical integer;
 BEGIN
   IF EXISTS (
     SELECT FROM formal_method_listing l LEFT JOIN frozen_kinds f
       USING (owner_subject,method_id,version,digest)
-    WHERE f.method_id IS NULL OR (l.method_kind IS NOT NULL AND l.method_kind <> f.method_kind)
+    WHERE l.status IN ('listed', 'pending')
+      AND (f.method_id IS NULL OR (l.method_kind IS NOT NULL AND l.method_kind <> f.method_kind))
   ) THEN
-    RAISE EXCEPTION 'A market version has no matching frozen registration or has conflicting kinds. Repeat export after in-flight registrations finish.';
+    RAISE EXCEPTION 'An active (listed/pending) market version has no matching frozen registration or has conflicting kinds. Repeat export after in-flight registrations finish.';
+  END IF;
+
+  SELECT count(*) INTO orphan_historical
+  FROM formal_method_listing l LEFT JOIN frozen_kinds f
+    USING (owner_subject,method_id,version,digest)
+  WHERE l.status NOT IN ('listed', 'pending')
+    AND (f.method_id IS NULL OR (l.method_kind IS NOT NULL AND l.method_kind <> f.method_kind));
+
+  IF orphan_historical > 0 THEN
+    RAISE WARNING 'Skipping % historical non-active formal_method_listing row(s) without matching frozen registration.', orphan_historical;
   END IF;
 END $$;
 UPDATE formal_method_listing l SET method_kind=f.method_kind

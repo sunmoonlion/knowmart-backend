@@ -48,6 +48,7 @@ from app.interfaces.http.middleware.auth import (
     get_web_knowbase_token,
     require_knowmart_admin,
 )
+from core.config import Settings, get_settings
 
 CONTRACT_VERSION = 1
 NO_STORE = {"Cache-Control": "no-store"}
@@ -415,11 +416,19 @@ async def report(principal: User, body: ReportIn, svc: Service) -> JSONResponse:
 
 class TakeDownIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["expert", "knowledge", "demand", "response", "message"]
+    kind: Literal[
+        "expert", "formal_method", "knowledge", "demand", "response", "message"
+    ]
     target_id: str = Field(min_length=1, max_length=160)
     note: str = Field(min_length=1, max_length=2000)
 
     violation: bool = Field(default=False, strict=True)
+
+
+class FormalSummonReturnIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source: str = Field(alias="from", min_length=1, max_length=64)
+    ref: str | None = Field(default=None, max_length=256)
 
 
 @admin_router.get("/shops")
@@ -604,6 +613,30 @@ async def withdraw_formal(principal: User, listing_id: UUID, svc: Service):
     return ok(await svc.withdraw_formal(principal.subject, listing_id))
 
 
+@web_router.get("/formal-methods/listings/{listing_id}")
+async def formal_detail(principal: User, listing_id: UUID, svc: Service):
+    return ok({"listing": await svc.formal_detail(principal.subject, listing_id)})
+
+
+@web_router.post("/formal-methods/listings/{listing_id}/summon-return")
+async def formal_summon_return(
+    principal: User,
+    listing_id: UUID,
+    body: FormalSummonReturnIn,
+    svc: Service,
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    return ok(
+        await svc.formal_summon_return(
+            principal.subject,
+            listing_id,
+            body.source,
+            body.ref,
+            settings.cross_app_sources(),
+        )
+    )
+
+
 @admin_router.get("/formal-methods/listings")
 async def pending_formal(_: Operator, svc: Admin, page: Page = 1):
     return ok(await svc.pending_formal(page))
@@ -616,6 +649,23 @@ async def review_formal(
     return ok(await svc.review_formal(principal.subject, listing_id, body))
 
 
+@admin_router.post("/formal-methods/{listing_id}/decision", status_code=204)
+async def decide_formal_listing(
+    principal: Operator, listing_id: UUID, body: ReviewDecision, svc: Service
+) -> Response:
+    await svc.review_formal(principal.subject, listing_id, body)
+    return Response(status_code=204, headers=NO_STORE)
+
+
 @web_router.post("/formal-methods/listings/{listing_id}/acquisitions")
-async def acquire_formal(principal: User, listing_id: UUID, svc: Service):
+async def acquire_formal(
+    principal: User,
+    listing_id: UUID,
+    svc: Service,
+    demand_id: Annotated[str | None, Query(min_length=36, max_length=36)] = None,
+):
+    if demand_id is not None:
+        return ok(
+            await svc.acquire_formal(principal.subject, listing_id, demand_id=demand_id)
+        )
     return ok(await svc.acquire_formal(principal.subject, listing_id))

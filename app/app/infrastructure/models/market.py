@@ -129,6 +129,13 @@ class Trade(Base):
             unique=True,
             postgresql_where=text("kind = 'expert'"),
         ),
+        Index(
+            "ix_trade_buyer_formal_ref",
+            "buyer_subject",
+            "listing_ref",
+            unique=True,
+            postgresql_where=text("kind IN ('formal_expert', 'formal_tool')"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
@@ -317,10 +324,17 @@ class FormalListing(Base):
             name="ck_formal_incubation_scope",
         ),
         CheckConstraint(
+            "incubation_scope = 'none' OR method_kind = 'tool'",
+            name="ck_formal_incubation_tool_only",
+        ),
+        CheckConstraint(
             "method_kind IN ('tool','expert')", name="ck_formal_method_kind"
         ),
         CheckConstraint("version > 0"),
-        CheckConstraint("status IN ('pending','listed','withdrawn','rejected')"),
+        CheckConstraint(
+            "status IN ('pending','listed','withdrawn','rejected','taken_down')",
+            name="ck_formal_listing_status",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True)
@@ -336,12 +350,23 @@ class FormalListing(Base):
         ForeignKey("publisher.id", ondelete="RESTRICT")
     )
     category: Mapped[str] = mapped_column(String(64))
+    directory_category: Mapped[str | None] = mapped_column(String(64))
+    domain_tags: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default=text("'[]'::jsonb")
+    )
+    public_contract: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    price: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    delist_reason: Mapped[str | None] = mapped_column(String(32))
     title: Mapped[str] = mapped_column(Text)
     purpose: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16))
     reviewed_by: Mapped[str | None] = mapped_column(String(512))
     review_note: Mapped[str | None] = mapped_column(Text)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = _now()
 
 
 class FormalAcquisition(Base):

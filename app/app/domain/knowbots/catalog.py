@@ -116,6 +116,27 @@ def suggested_tool_category(title, purpose):
     return None
 
 
+EXPERT_TERMS = {
+    "analysis.statements": ("报表核验", "资产负债", "利润表", "现金流量表", "报表勾稽"),
+    "analysis.operations": ("经营分析", "杜邦分析", "周转分析", "成本结构"),
+    "analysis.forecast": ("预测与估值", "财务预测", "现金流贴现", "敏感性分析"),
+}
+
+
+def suggested_expert_category(title, purpose):
+    for field in (title, purpose):
+        hits = [
+            code
+            for code, phrases in EXPERT_TERMS.items()
+            if any(word in field for word in phrases)
+        ]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            break
+    return None
+
+
 TOOL_BY_CODE = {c.code: c for c in TOOL_CATEGORIES}
 BY_CODE = {c.code: c for c in CATEGORIES}
 GROUPS = tuple(dict.fromkeys(c.group for c in CATEGORIES))

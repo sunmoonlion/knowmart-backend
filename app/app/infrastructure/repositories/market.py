@@ -175,13 +175,22 @@ class SqlMarketRepository:
                 .with_for_update()
             )
         ).scalar_one()
-        if (
-            row.digest == fields["digest"]
-            and row.method_kind is None
-            and fields.get("method_kind")
-        ):
-            row.method_kind = fields["method_kind"]
-            await self.session.flush()
+        if row.digest == fields["digest"]:
+            changed = False
+            if row.method_kind is None and fields.get("method_kind"):
+                row.method_kind = fields["method_kind"]
+                changed = True
+            if not row.public_contract and fields.get("public_contract"):
+                row.public_contract = fields["public_contract"]
+                changed = True
+            if row.directory_category is None and fields.get("directory_category"):
+                row.directory_category = fields["directory_category"]
+                changed = True
+            if not row.domain_tags and fields.get("domain_tags"):
+                row.domain_tags = fields["domain_tags"]
+                changed = True
+            if changed:
+                await self.session.flush()
         return _row(row)
 
     @staticmethod
@@ -195,18 +204,22 @@ class SqlMarketRepository:
 
     @staticmethod
     def directory_category():
-        # Public experts display their reviewed business category. Owners can
-        # classify self-use experts without changing any publishing qualification.
+        # Regulated category governs licences; directory_category/classification
+        # governs discovery facets for both tools and experts.
         return case(
             (
                 FormalListing.method_kind == "tool",
-                func.coalesce(MethodClassification.code, "uncategorized"),
+                func.coalesce(
+                    MethodClassification.code,
+                    FormalListing.directory_category,
+                    "uncategorized",
+                ),
             ),
-            (
-                FormalListing.scope == "self",
-                func.coalesce(MethodClassification.code, FormalListing.category),
+            else_=func.coalesce(
+                MethodClassification.code,
+                FormalListing.directory_category,
+                FormalListing.category,
             ),
-            else_=FormalListing.category,
         )
 
     async def directory_labels(self, subject, references, today, public):
@@ -276,6 +289,16 @@ class SqlMarketRepository:
             .values(**values, code=code)
             .on_conflict_do_update(index_elements=list(values), set_={"code": code})
         )
+        await self.session.execute(
+            update(FormalListing)
+            .where(
+                FormalListing.owner_subject == row["owner_subject"],
+                FormalListing.method_id == row["method_id"],
+                FormalListing.version == row["version"],
+                FormalListing.digest == row["digest"],
+            )
+            .values(directory_category=code, updated_at=func.now())
+        )
 
     async def catalog_methods(
         self,
@@ -296,6 +319,14 @@ class SqlMarketRepository:
         )
         if public:
             visible = or_(visible, public_formal_listing(today))
+        acquired = (
+            select(FormalAcquisition.listing_id)
+            .where(
+                FormalAcquisition.listing_id == FormalListing.id,
+                FormalAcquisition.buyer_subject == viewer,
+            )
+            .exists()
+        )
         stmt = (
             select(
                 FormalListing.method_id,
@@ -307,6 +338,11 @@ class SqlMarketRepository:
                 FormalListing.method_kind,
                 FormalListing.reviewed_at,
                 FormalListing.id,
+                FormalListing.owner_subject,
+                FormalListing.scope,
+                FormalListing.price,
+                FormalListing.public_contract,
+                acquired.label("acquired"),
             )
             .distinct(FormalListing.method_id)
             .where(
@@ -351,7 +387,12 @@ class SqlMarketRepository:
 
     async def owner_formal_listings(self, subject, after, limit):
         stmt = (
-            select(FormalListing, MethodClassification.code)
+            select(
+                FormalListing,
+                func.coalesce(
+                    MethodClassification.code, FormalListing.directory_category
+                ),
+            )
             .outerjoin(MethodClassification, self.classification_join())
             .where(FormalListing.owner_subject == subject)
         )
@@ -366,6 +407,7 @@ class SqlMarketRepository:
         stmt = select(FormalListing).where(
             FormalListing.owner_subject == subject,
             FormalListing.scope == "public",
+            FormalListing.method_kind == "tool",
             or_(
                 FormalListing.status == "listed",
                 FormalListing.incubation_scope != "none",
@@ -392,6 +434,7 @@ class SqlMarketRepository:
         stmt = select(FormalListing).where(
             FormalListing.scope == "public",
             FormalListing.status == "listed",
+            FormalListing.method_kind == "tool",
             FormalListing.owner_subject != query.subject,
             or_(
                 FormalListing.incubation_scope == "platform",
@@ -425,9 +468,11 @@ class SqlMarketRepository:
                 FormalListing.digest == ref.digest,
             )
         if query.topic_terms:
-            ranked = stmt.add_columns(MethodClassification.code).outerjoin(
-                MethodClassification, self.classification_join()
-            )
+            ranked = stmt.add_columns(
+                func.coalesce(
+                    MethodClassification.code, FormalListing.directory_category
+                )
+            ).outerjoin(MethodClassification, self.classification_join())
             result = await self.session.execute(
                 ranked.order_by(FormalListing.id).limit(query.limit + 1)
             )
@@ -457,8 +502,12 @@ class SqlMarketRepository:
         pin = (FormalListing.method_id, FormalListing.version, FormalListing.digest)
         base = select(*pin).where(qualified)
         if codes is not None:
-            base = base.join(MethodClassification, self.classification_join()).where(
-                MethodClassification.code.in_(codes)
+            base = base.outerjoin(
+                MethodClassification, self.classification_join()
+            ).where(
+                func.coalesce(
+                    MethodClassification.code, FormalListing.directory_category
+                ).in_(codes)
             )
         if references is not None:
             base = base.where(
@@ -499,7 +548,7 @@ class SqlMarketRepository:
         await self.session.execute(
             update(FormalListing)
             .where(FormalListing.id == listing_id)
-            .values(**changes)
+            .values(updated_at=func.now(), **changes)
         )
 
     async def acquire_formal_listing(self, listing_id, buyer):
@@ -513,6 +562,93 @@ class SqlMarketRepository:
         return (
             await self.session.get(FormalAcquisition, (listing_id, buyer)) is not None
         )
+
+    async def formal_versions_of_method(
+        self,
+        owner_subject: str,
+        method_id: uuid.UUID,
+        viewer: str,
+        *,
+        public: bool,
+        today: date,
+    ) -> list[dict[str, Any]]:
+        if owner_subject == viewer:
+            visible = FormalListing.owner_subject == owner_subject
+        elif public:
+            acquired = (
+                select(FormalAcquisition.listing_id)
+                .where(
+                    FormalAcquisition.listing_id == FormalListing.id,
+                    FormalAcquisition.buyer_subject == viewer,
+                )
+                .exists()
+            )
+            visible = public_formal_listing(today) & (
+                (FormalListing.status == "listed")
+                | ((FormalListing.status == "withdrawn") & acquired)
+            )
+        else:
+            return []
+        stmt = (
+            select(FormalListing)
+            .where(
+                FormalListing.owner_subject == owner_subject,
+                FormalListing.method_id == method_id,
+                visible,
+            )
+            .order_by(FormalListing.version.desc(), FormalListing.scope)
+        )
+        return [_row(r) for r in await self.session.scalars(stmt)]
+
+    async def public_formal_listings_of_owner(
+        self, owner: str, today: date
+    ) -> list[dict[str, Any]]:
+        stmt = (
+            select(
+                FormalListing,
+                self.directory_category().label("resolved_directory_category"),
+            )
+            .outerjoin(MethodClassification, self.classification_join())
+            .where(
+                FormalListing.owner_subject == owner,
+                FormalListing.status == "listed",
+                public_formal_listing(today),
+            )
+            .order_by(
+                FormalListing.method_id,
+                FormalListing.version.desc(),
+                FormalListing.id,
+            )
+            .distinct(FormalListing.method_id)
+        )
+        rows = await self.session.execute(stmt)
+        return [{**_row(r), "resolved_directory_category": cat} for r, cat in rows]
+
+    async def public_formal_by_publisher(
+        self, publisher_id: uuid.UUID, category: str | None
+    ) -> list[dict[str, Any]]:
+        where = [
+            FormalListing.publisher_id == publisher_id,
+            FormalListing.scope == "public",
+            FormalListing.status.in_(("pending", "listed")),
+        ]
+        if category is not None:
+            where.append(FormalListing.category == category)
+        rows = await self.session.scalars(select(FormalListing).where(*where))
+        return [_row(r) for r in rows]
+
+    async def formal_listing_by_pin(
+        self, owner_subject: str, method_id: uuid.UUID, version: int, *, scope: str
+    ) -> dict[str, Any] | None:
+        row = await self.session.scalar(
+            select(FormalListing).where(
+                FormalListing.owner_subject == owner_subject,
+                FormalListing.method_id == method_id,
+                FormalListing.version == version,
+                FormalListing.scope == scope,
+            )
+        )
+        return None if row is None else _row(row)
 
     # ---------- 发布主体与资质 ----------
     async def publisher_of(self, subject: str) -> dict[str, Any] | None:
@@ -845,6 +981,34 @@ class SqlMarketRepository:
             for who, category, at in (await self.session.execute(experts)).all():
                 out.append(
                     {"owner": who, "kind": "expert", "category": category, "at": at}
+                )
+            formal = (
+                select(
+                    FormalListing.owner_subject,
+                    FormalListing.method_kind,
+                    FormalListing.category,
+                    func.coalesce(
+                        FormalListing.reviewed_at,
+                        FormalListing.updated_at,
+                        FormalListing.created_at,
+                    ),
+                )
+                .where(
+                    FormalListing.status == "listed",
+                    public_formal_listing(today),
+                )
+                .distinct(FormalListing.owner_subject, FormalListing.method_id)
+            )
+            if owner is not None:
+                formal = formal.where(FormalListing.owner_subject == owner)
+            for who, m_kind, category, at in (await self.session.execute(formal)).all():
+                out.append(
+                    {
+                        "owner": who,
+                        "kind": "tool" if m_kind == "tool" else "expert",
+                        "category": category,
+                        "at": at,
+                    }
                 )
         demands = select(Demand.buyer_subject, Demand.created_at).where(
             Demand.shop_public.is_(True),
@@ -1194,6 +1358,20 @@ class SqlMarketRepository:
         ).scalar_one_or_none()
         return row is not None
 
+    async def trades_for_formal(self, method_ref_prefix: str) -> list[dict[str, Any]]:
+        rows = (
+            await self.session.execute(
+                select(Trade).where(
+                    Trade.kind.in_(("formal_expert", "formal_tool")),
+                    or_(
+                        Trade.listing_ref == method_ref_prefix,
+                        Trade.listing_ref.like(f"{method_ref_prefix}@%"),
+                    ),
+                )
+            )
+        ).scalars()
+        return [_row(r) for r in rows]
+
     async def add_trade(self, fields: dict[str, Any]) -> dict[str, Any]:
         if fields.get("kind") == "expert":
             trade_id = uuid.uuid4()
@@ -1211,6 +1389,26 @@ class SqlMarketRepository:
                         Trade.buyer_subject == fields["buyer_subject"],
                         Trade.listing_ref == fields["listing_ref"],
                         Trade.kind == "expert",
+                    )
+                )
+            ).scalar_one()
+            return _row(row)
+        if fields.get("kind") in ("formal_expert", "formal_tool"):
+            trade_id = uuid.uuid4()
+            await self.session.execute(
+                pg_insert(Trade)
+                .values(id=trade_id, **fields)
+                .on_conflict_do_nothing(
+                    index_elements=[Trade.buyer_subject, Trade.listing_ref],
+                    index_where=Trade.kind.in_(("formal_expert", "formal_tool")),
+                )
+            )
+            row = (
+                await self.session.execute(
+                    select(Trade).where(
+                        Trade.buyer_subject == fields["buyer_subject"],
+                        Trade.listing_ref == fields["listing_ref"],
+                        Trade.kind.in_(("formal_expert", "formal_tool")),
                     )
                 )
             ).scalar_one()

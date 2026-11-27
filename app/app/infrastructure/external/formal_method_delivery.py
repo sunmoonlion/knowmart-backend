@@ -1,6 +1,6 @@
 """Fetch the exact version from the runtime using a dedicated service identity."""
 
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -52,6 +52,7 @@ class DeliveryReceipt(DeliveryDocument):
     delivery_digest: str = Field(pattern=r"^sha256:[a-f0-9]{64}$")
     title: str = Field(min_length=1, max_length=20000)
     purpose: str = Field(min_length=1, max_length=20000)
+    public_contract: dict[str, Any] | None = None
     skill_dependencies: list[SkillDependency] = Field(max_length=1001)
     package: DeliveredSkill | None = None
 

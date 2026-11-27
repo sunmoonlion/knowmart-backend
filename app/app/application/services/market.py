@@ -22,6 +22,7 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 from app.application.errors.exceptions import (
     AppException,
@@ -35,6 +36,7 @@ from app.application.ports.knowbots import KnowbotRepository
 from app.application.ports.market import KnowledgeVault, MarketRepository, Row
 from app.domain.knowbots.catalog import (
     BY_CODE,
+    CATEGORIES,
     DEFAULT_CATEGORY,
     EXPERT_DIRECTORY_BY_CODE,
     EXPERT_DIRECTORY_CATEGORIES,
@@ -43,6 +45,7 @@ from app.domain.knowbots.catalog import (
     category_view,
     in_category,
     matching_tool_categories,
+    suggested_expert_category,
     suggested_tool_category,
 )
 from app.domain.knowbots.manifest import SCHEMA_V3
@@ -148,6 +151,49 @@ def _buy_digest(listing_id: str, body: BuyIn) -> str:
 def check_category(category: str) -> None:
     if category not in BY_CODE or category == DEFAULT_CATEGORY:
         raise BadRequestError("Choose a category", code="category_invalid")
+
+
+def resolve_formal_categories(
+    raw_category: str,
+    directory_category: str | None,
+    method_kind: str | None,
+    title: str,
+    purpose: str,
+) -> tuple[str, str | None]:
+    """Decouple regulated licensing category (BY_CODE) from discovery facet."""
+    if raw_category == DEFAULT_CATEGORY:
+        raise BadRequestError("Choose a category", code="category_invalid")
+    if raw_category in BY_CODE:
+        regulated = raw_category
+    elif method_kind in (None, "tool") and raw_category in TOOL_BY_CODE:
+        regulated = "tools.calculator"
+        directory_category = directory_category or raw_category
+    elif method_kind in (None, "expert") and raw_category in EXPERT_DIRECTORY_BY_CODE:
+        regulated = "business.management"
+        directory_category = directory_category or raw_category
+    else:
+        raise BadRequestError("Choose a category", code="category_invalid")
+
+    choices = (
+        (TOOL_BY_CODE | EXPERT_DIRECTORY_BY_CODE)
+        if method_kind is None
+        else (TOOL_BY_CODE if method_kind == "tool" else EXPERT_DIRECTORY_BY_CODE)
+    )
+    if directory_category is not None:
+        if directory_category not in choices:
+            raise BadRequestError("Unknown method category", code="category_invalid")
+        resolved_dir: str | None = directory_category
+    elif method_kind is None:
+        resolved_dir = None
+    else:
+        resolved_dir = (
+            suggested_tool_category(title, purpose)
+            if method_kind == "tool"
+            else suggested_expert_category(title, purpose)
+        )
+        if resolved_dir is None and raw_category in choices:
+            resolved_dir = raw_category
+    return regulated, resolved_dir
 
 
 def is_platform(publisher: Row | None, platform_credit_code: str) -> bool:
@@ -306,6 +352,7 @@ class MarketService:
                 {
                     **await self._shop_header(shop, None),
                     "experts": act["expert"],
+                    "tools": act["tool"],
                     "knowledge": act["knowledge"],
                     "demands": act["demand"],
                     "categories": [category_view(c) for c in sorted(act["categories"])],
@@ -330,6 +377,7 @@ class MarketService:
             return {
                 "shop": header,
                 "experts": [],
+                "formal_methods": [],
                 "knowledge": [],
                 "demands": [],
                 "reviews": [],
@@ -339,6 +387,11 @@ class MarketService:
         today = self.now().date()
         experts = (
             await self.repo.public_experts(owner, today) if self.public_market else []
+        )
+        formal_methods = (
+            await self.repo.public_formal_listings_of_owner(owner, today)
+            if self.public_market
+            else []
         )
         knowledge, _ = await self.repo.listed_knowledge(
             q=None, category=None, limit=1000, offset=0, today=today, seller=owner
@@ -361,6 +414,23 @@ class MarketService:
                     "price": _money(b["price"]),
                 }
                 for b in experts
+            ],
+            "formal_methods": [
+                {
+                    "listing_id": str(f["id"]),
+                    "reference": formal_ref(f),
+                    "method_kind": f["method_kind"] or "expert",
+                    "title": f["title"],
+                    "purpose": f["purpose"],
+                    "category": category_view(
+                        f.get("resolved_directory_category")
+                        or f.get("directory_category")
+                        or f["category"],
+                        tool=f.get("method_kind") == "tool",
+                    ),
+                    "price": _money(f.get("price")),
+                }
+                for f in formal_methods
             ],
             "knowledge": [listing_view(x, viewer=viewer) for x in knowledge],
             "demands": demands,
@@ -587,6 +657,11 @@ class MarketService:
         async with self.repo.transaction():
             rows = await self.repo.owner_formal_listings(subject, after, limit)
             return {
+                "regulated_categories": [
+                    {**category_view(c.code), "license": bool(c.license)}
+                    for c in CATEGORIES
+                    if c.code != DEFAULT_CATEGORY
+                ],
                 "directory_categories": {
                     kind: [category_view(c.code, tool=kind == "tool") for c in choices]
                     for kind, choices in (
@@ -599,27 +674,31 @@ class MarketService:
                         "listing_id": str(row["id"]),
                         "reference": formal_ref(row),
                         "title": row["title"],
-                        "suggested_category": suggested_tool_category(
-                            row["title"], row["purpose"]
+                        "purpose": row["purpose"],
+                        "suggested_category": (
+                            suggested_tool_category(row["title"], row["purpose"])
+                            if row.get("method_kind") == "tool"
+                            else suggested_expert_category(row["title"], row["purpose"])
                         )
-                        if row.get("method_kind") == "tool"
-                        and not row.get("tool_category")
+                        if not row.get("tool_category")
                         else None,
                         "method_kind": row.get("method_kind"),
+                        "category": row["category"],
                         "editable_category": (
                             row.get("tool_category")
+                            or row.get("directory_category")
                             or (
                                 row["category"]
                                 if row.get("method_kind") == "expert"
                                 else DEFAULT_CATEGORY
                             )
                         )
-                        if row.get("method_kind") == "tool"
-                        or (
-                            row.get("method_kind") == "expert"
-                            and row["scope"] == "self"
-                        )
+                        if row.get("method_kind") in ("tool", "expert")
                         else None,
+                        "price": _money(row.get("price")),
+                        "incubation_scope": row.get("incubation_scope") or "none",
+                        "review_note": row.get("review_note"),
+                        "delist_reason": row.get("delist_reason"),
                         "scope": row["scope"],
                         "status": row["status"],
                     }
@@ -665,10 +744,7 @@ class MarketService:
             if (
                 not row
                 or row["owner_subject"] != subject
-                or not (
-                    row["method_kind"] == "tool"
-                    or (row["method_kind"] == "expert" and row["scope"] == "self")
-                )
+                or row.get("method_kind") not in ("tool", "expert")
             ):
                 raise _missing("formal_listing")
             choices = (
@@ -705,6 +781,11 @@ class MarketService:
             row = await self.repo.formal_listing(listing_id)
             if not row or row["owner_subject"] != subject or row["scope"] != "public":
                 raise _missing("formal_listing")
+            if row.get("method_kind") != "tool":
+                raise BadRequestError(
+                    "Only formal tool methods can grant incubation permission",
+                    code="incubation_tool_only",
+                )
             if permission.scope != "none":
                 if row["status"] != "listed":
                     raise _missing("formal_listing")
@@ -761,6 +842,25 @@ class MarketService:
     async def submit_formal_self(self, body):
         # KnowLab sends the immutable identity and review over the deliver relation.
         ref = body.reference
+        public_contract = dict(body.public_contract or {})
+        domain_tags = [
+            str(tag)
+            for tag in (public_contract.get("domain_tags") or [])
+            if isinstance(tag, str)
+        ]
+        default_dir = body.directory_category
+        if default_dir is not None:
+            choices = (
+                TOOL_BY_CODE if body.method_kind == "tool" else EXPERT_DIRECTORY_BY_CODE
+            )
+            if default_dir not in choices:
+                raise BadRequestError(
+                    "Unknown method category", code="category_invalid"
+                )
+        elif body.method_kind == "tool":
+            default_dir = suggested_tool_category(body.title, body.purpose)
+        elif body.method_kind == "expert":
+            default_dir = suggested_expert_category(body.title, body.purpose)
         async with self.repo.transaction():
             row = await self.repo.submit_formal_listing(
                 dict(
@@ -774,6 +874,9 @@ class MarketService:
                     scope="self",
                     publisher_id=None,
                     category=DEFAULT_CATEGORY,
+                    directory_category=default_dir,
+                    domain_tags=domain_tags,
+                    public_contract=public_contract,
                     title=body.title,
                     purpose=body.purpose,
                     status="pending" if body.review_findings else "listed",
@@ -830,17 +933,43 @@ class MarketService:
     async def submit_formal(self, subject, body):
         if not self.public_market:
             raise _missing("formal_listing")
-        check_category(body.category)
+        prelim_regulated, _ = resolve_formal_categories(
+            body.category, body.directory_category, None, "", ""
+        )
         async with self.repo.transaction():
+            prior = await self.repo.formal_listing_by_pin(
+                subject,
+                body.reference.method_id,
+                body.reference.version,
+                scope="public",
+            )
+            if prior and prior["status"] == "taken_down":
+                raise _conflict(
+                    "This formal method was taken down by the platform",
+                    "listing_taken_down",
+                )
             await self._open_shop(subject)
-            await self._qualified(subject, body.category)
+            await self._qualified(subject, prelim_regulated)
         ref = body.reference.model_dump(mode="json")
         ready = await self._formal_version(subject, ref)
         if ready.get("method_kind") not in ("tool", "expert"):
             raise BadGatewayError("Missing frozen method classification")
+        regulated, dir_cat = resolve_formal_categories(
+            body.category,
+            body.directory_category,
+            ready["method_kind"],
+            ready["title"],
+            ready["purpose"],
+        )
+        public_contract = dict(ready.get("public_contract") or {})
+        domain_tags = [
+            str(tag)
+            for tag in (public_contract.get("domain_tags") or [])
+            if isinstance(tag, str)
+        ]
         async with self.repo.transaction():
             await self._open_shop(subject)
-            publisher = await self._qualified(subject, body.category)
+            publisher = await self._qualified(subject, regulated)
             fields = dict(
                 id=uuid.uuid4(),
                 owner_subject=subject,
@@ -851,12 +980,21 @@ class MarketService:
                 title=ready["title"],
                 purpose=ready["purpose"],
                 method_kind=ready["method_kind"],
-                category=body.category,
+                category=regulated,
+                directory_category=dir_cat,
+                domain_tags=domain_tags,
+                public_contract=public_contract,
+                price=body.price,
                 publisher_id=publisher["id"],
                 scope="public",
                 status="pending",
             )
             row = await self.repo.submit_formal_listing(fields)
+            if row["status"] == "taken_down":
+                raise _conflict(
+                    "This formal method was taken down by the platform",
+                    "listing_taken_down",
+                )
             if any(
                 row[k] != fields[k]
                 for k in (
@@ -871,6 +1009,17 @@ class MarketService:
                     "Listing version already has another review scope",
                     "formal_listing_conflict",
                 )
+            updates: dict[str, Any] = {}
+            if body.price is not None and row.get("price") != body.price:
+                updates["price"] = body.price
+            if body.directory_category and row.get("directory_category") != dir_cat:
+                updates["directory_category"] = dir_cat
+            if row["status"] == "withdrawn":
+                updates["status"] = "pending"
+                updates["delist_reason"] = None
+            if updates:
+                await self.repo.update_formal_listing(row["id"], **updates)
+                row = {**row, **updates}
             return {
                 "listing_id": str(row["id"]),
                 "status": row["status"],
@@ -935,12 +1084,18 @@ class MarketService:
             row = await self.repo.formal_listing(listing_id)
             if not row or row["owner_subject"] != subject:
                 raise _missing("formal_listing")
+            if row["status"] == "taken_down":
+                raise _conflict(
+                    "Listing was taken down by the platform", "listing_taken_down"
+                )
             if row["status"] == "rejected":
                 raise _conflict(
                     "Listing is restricted by the operator", "formal_listing_rejected"
                 )
             if row["status"] != "withdrawn":
-                await self.repo.update_formal_listing(listing_id, status="withdrawn")
+                await self.repo.update_formal_listing(
+                    listing_id, status="withdrawn", incubation_scope="none"
+                )
             return {"listing_id": str(listing_id), "status": "withdrawn"}
 
     async def _acquirable_formal(self, subject, listing_id, runtime, *, lock):
@@ -953,7 +1108,54 @@ class MarketService:
         await self._formal_qualified(row)
         return row
 
-    async def acquire_formal(self, subject, listing_id, *, runtime=False, skill=None):
+    async def _chosen_formal_demand(
+        self, buyer: str, explicit_demand_id: str | None, row: Row
+    ) -> uuid.UUID | None:
+        method_ref = f"{row['method_id']}@{row['version']}"
+        listing_str = str(row["id"])
+        expected_kinds = (
+            ("formal_tool",)
+            if row.get("method_kind") == "tool"
+            else ("formal_expert", "expert")
+        )
+        if explicit_demand_id is not None:
+            demand = await self.repo.get_demand(explicit_demand_id)
+            if (
+                demand is None
+                or demand["buyer_subject"] != buyer
+                or demand["status"] != "chosen"
+            ):
+                raise _missing("demand")
+            response = (
+                await self.repo.get_response(str(demand["chosen_response_id"]))
+                if demand["chosen_response_id"]
+                else None
+            )
+            if (
+                response is None
+                or response["listing_kind"] not in expected_kinds
+                or response["listing_ref"] not in (listing_str, method_ref)
+            ):
+                raise BadRequestError(
+                    "The chosen response did not offer this listing",
+                    code="not_the_chosen_offer",
+                )
+            return demand["id"]
+        for demand in await self.repo.demands_of(buyer):
+            if demand["status"] != "chosen" or not demand["chosen_response_id"]:
+                continue
+            response = await self.repo.get_response(str(demand["chosen_response_id"]))
+            if (
+                response is not None
+                and response["listing_kind"] in expected_kinds
+                and response["listing_ref"] in (listing_str, method_ref)
+            ):
+                return demand["id"]
+        return None
+
+    async def acquire_formal(
+        self, subject, listing_id, *, runtime=False, skill=None, demand_id=None
+    ):
         if skill is not None and not runtime:
             raise _missing("formal_acquisition")
         async with self.repo.transaction():
@@ -981,6 +1183,34 @@ class MarketService:
                 )
             if not runtime:
                 await self.repo.acquire_formal_listing(listing_id, subject)
+                if subject != row["owner_subject"]:
+                    matched_demand = await self._chosen_formal_demand(
+                        subject, demand_id, row
+                    )
+                    trade_kind = (
+                        "formal_tool"
+                        if row.get("method_kind") == "tool"
+                        else "formal_expert"
+                    )
+                    await self.repo.add_trade(
+                        {
+                            "kind": trade_kind,
+                            "buyer_subject": subject,
+                            "seller_subject": row["owner_subject"],
+                            "listing_ref": f"{row['method_id']}@{row['version']}",
+                            "title": f"{row['title']} v{row['version']}",
+                            "price": row.get("price"),
+                            "granted": [
+                                {"name": row["title"], "item_id": str(row["id"])}
+                            ],
+                            "demand_id": matched_demand,
+                            "seller_publisher": await self._publisher_then(
+                                row["publisher_id"]
+                            ),
+                        }
+                    )
+                    if matched_demand is not None:
+                        await self.repo.update_demand(matched_demand, status="closed")
             result = {
                 "listing_id": str(listing_id),
                 "reference": ref,
@@ -994,6 +1224,169 @@ class MarketService:
                 result["package"] = package
             result["skill_dependencies"] = ready["skill_dependencies"]
             return result
+
+    async def formal_detail(self, viewer: str, listing_id: uuid.UUID) -> Row:
+        today = self.now().date()
+        async with self.repo.transaction():
+            row = await self.repo.formal_listing(listing_id, lock=False)
+            if row is None:
+                raise _missing("formal_listing")
+            owned = row["owner_subject"] == viewer
+            acquired = await self.repo.has_formal_acquisition(listing_id, viewer)
+            shop = await self.repo.shop_of(row["owner_subject"])
+            if not owned:
+                if (
+                    not self.public_market
+                    or row["scope"] != "public"
+                    or shop_closed(shop)
+                    or not await still_qualified(
+                        self.repo, row["publisher_id"], row["category"], today
+                    )
+                    or not (
+                        row["status"] == "listed"
+                        or (row["status"] == "withdrawn" and acquired)
+                    )
+                ):
+                    raise _missing("formal_listing")
+            versions = await self.repo.formal_versions_of_method(
+                row["owner_subject"],
+                row["method_id"],
+                viewer,
+                public=self.public_market,
+                today=today,
+            )
+            labels = await self.repo.directory_labels(
+                viewer,
+                [
+                    type(
+                        "Pin",
+                        (),
+                        {
+                            "method_id": row["method_id"],
+                            "version": row["version"],
+                            "digest": row["digest"],
+                        },
+                    )()
+                ],
+                today,
+                self.public_market,
+            )
+            dir_code = (
+                labels[0]["category"]
+                if labels
+                else (
+                    row.get("directory_category")
+                    or (
+                        row["category"]
+                        if row.get("method_kind") == "expert"
+                        else DEFAULT_CATEGORY
+                    )
+                )
+            )
+            publisher_info = None
+            if row["publisher_id"]:
+                pub = await self.repo.get_publisher(str(row["publisher_id"]))
+                if (
+                    pub
+                    and pub["review_status"] == "approved"
+                    and pub["real_name_verified"]
+                ):
+                    lics = [
+                        {
+                            "name": lic["license_name"],
+                            "number": lic["license_no"],
+                            "valid_until": _iso(lic["valid_until"]),
+                        }
+                        for lic in await self.repo.licenses_of(str(pub["id"]))
+                        if lic["review_status"] == "approved"
+                        and (lic["valid_until"] is None or lic["valid_until"] >= today)
+                    ]
+                    publisher_info = {
+                        **public_publisher(pub),
+                        "licenses": lics,
+                    }
+            reviews = await self.repo.reviews_for(str(row["method_id"]))
+            raw_contract = row.get("public_contract") or {}
+            method_kind = row.get("method_kind") or "expert"
+            stamp = (
+                row.get("reviewed_at") or row.get("updated_at") or row.get("created_at")
+            )
+            return {
+                "listing_id": str(row["id"]),
+                "reference": formal_ref(row),
+                "method_kind": method_kind,
+                "title": row["title"],
+                "purpose": row["purpose"],
+                "scope": row["scope"],
+                "status": row["status"],
+                "owned": owned,
+                "acquired": bool(acquired),
+                "summonable": bool(
+                    method_kind == "expert"
+                    and (owned or row["status"] == "listed" or acquired)
+                ),
+                "category": category_view(dir_code, tool=method_kind == "tool"),
+                "regulated_category": category_view(row["category"]),
+                "price": _money(row.get("price")),
+                "incubation_scope": row.get("incubation_scope") or "none",
+                "updated_at": _iso(stamp) or "",
+                "public_contract": formal_contract_view(
+                    raw_contract,
+                    method_kind=method_kind,
+                    title=row["title"],
+                    purpose=row["purpose"],
+                ),
+                "versions": [
+                    {
+                        "listing_id": str(v["id"]),
+                        "version": v["version"],
+                        "scope": v["scope"],
+                        "status": v["status"],
+                        "updated_at": _iso(
+                            v.get("reviewed_at")
+                            or v.get("updated_at")
+                            or v.get("created_at")
+                        )
+                        or "",
+                    }
+                    for v in versions
+                ],
+                "shop": shop_ref(shop) if shop else None,
+                "publisher": publisher_info,
+                "reviews": [review_view(r) for r in reviews],
+                "rating": rating_of(reviews),
+            }
+
+    async def formal_summon_return(
+        self,
+        viewer: str,
+        listing_id: uuid.UUID,
+        source: str,
+        ref: str | None,
+        sources: dict[str, Any],
+    ) -> Row:
+        from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+        from app.domain.cross_app import clean_origin, known_apps, return_url
+
+        origin = clean_origin(source, ref, known_apps=known_apps(sources))
+        target = return_url(sources.get(origin.app) if origin else None, origin)
+        if origin is None or target is None:
+            raise BadRequestError(
+                "There is no registered place to return to", code="no_return_target"
+            )
+        detail = await self.formal_detail(viewer, listing_id)
+        if not detail["owned"]:
+            await self.acquire_formal(viewer, listing_id)
+        pin = detail["reference"]
+        parts = urlsplit(target)
+        query = [
+            (k, v)
+            for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k != "formal_method"
+        ]
+        query.append(("formal_method", f"{pin['method_id']}@{pin['version']}"))
+        return {"return_url": urlunsplit(parts._replace(query=urlencode(query)))}
 
     # ================= 专家条目 =================
     async def set_expert_listing(
@@ -1793,6 +2186,28 @@ class MarketService:
             ):
                 raise _missing()
             return
+        if kind in ("formal_expert", "formal_tool"):
+            expected_kind = "tool" if kind == "formal_tool" else "expert"
+            if "@" in ref:
+                mid_str, _, ver_str = ref.partition("@")
+                try:
+                    mid, ver = uuid.UUID(mid_str), int(ver_str)
+                except ValueError as exc:
+                    raise _missing("formal_listing") from exc
+                row = await self.repo.formal_listing_by_pin(
+                    subject, mid, ver, scope="public"
+                )
+            else:
+                row = await self.repo.formal_listing(_uuid(ref), lock=False)
+            if (
+                row is None
+                or row["owner_subject"] != subject
+                or row["scope"] != "public"
+                or row["status"] != "listed"
+                or row.get("method_kind") != expected_kind
+            ):
+                raise _missing("formal_listing")
+            return
         knowbot_id, _, version = ref.partition("@")
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] != subject or not version:
@@ -1851,7 +2266,7 @@ class MarketService:
                     "listing_state": "off" if state == "retired" else state,
                     **(
                         {"expert_link_available": state not in ("retired", "revoked")}
-                        if trade["kind"] == "expert"
+                        if trade["kind"] in ("expert", "formal_expert", "formal_tool")
                         else {}
                     ),
                 }
@@ -1872,6 +2287,26 @@ class MarketService:
                     self.repo, listing["publisher_id"], listing["category"], today
                 )
                 and not shop_closed(await self.repo.shop_of(listing["seller_subject"]))
+            )
+            return "on" if up else "off"
+        if trade["kind"] in ("formal_expert", "formal_tool"):
+            mid_str, _, ver_str = str(trade["listing_ref"]).partition("@")
+            try:
+                mid, ver = uuid.UUID(mid_str), int(ver_str)
+            except ValueError:
+                return "retired"
+            row = await self.repo.formal_listing_by_pin(
+                trade["seller_subject"], mid, ver, scope="public"
+            )
+            if row is None:
+                return "retired"
+            up = (
+                self.public_market
+                and row["status"] == "listed"
+                and await still_qualified(
+                    self.repo, row["publisher_id"], row["category"], today
+                )
+                and not shop_closed(await self.repo.shop_of(row["owner_subject"]))
             )
             return "on" if up else "off"
         knowbot_id, _, version = str(trade["listing_ref"]).partition("@")
@@ -2207,6 +2642,64 @@ class MarketAdmin:
                 for item in await self.repo.pending_listings()
             ],
             "experts": experts,
+            "formal_listings": [
+                {
+                    "listing_id": str(r["id"]),
+                    "reference": formal_ref(r),
+                    "method_kind": r.get("method_kind") or "expert",
+                    "scope": r["scope"],
+                    "title": r["title"],
+                    "purpose": r["purpose"],
+                    "category": category_view(r["category"]),
+                    "directory_category": category_view(
+                        r.get("directory_category")
+                        or (
+                            r["category"]
+                            if r.get("method_kind") == "expert"
+                            else DEFAULT_CATEGORY
+                        ),
+                        tool=r.get("method_kind") == "tool",
+                    ),
+                    "price": _money(r.get("price")),
+                    "publisher_id": str(r["publisher_id"])
+                    if r.get("publisher_id")
+                    else None,
+                    "review_note": r.get("review_note"),
+                    "public_contract": formal_contract_view(
+                        r.get("public_contract") or {},
+                        method_kind=r.get("method_kind") or "expert",
+                        title=r["title"],
+                        purpose=r["purpose"],
+                    ),
+                    "flagged": flagged(
+                        r["title"],
+                        r["purpose"],
+                        *[
+                            str(x)
+                            for x in (
+                                (r.get("public_contract") or {}).get("applies_when")
+                                or ()
+                            )
+                        ],
+                        *[
+                            str(x)
+                            for x in (
+                                (r.get("public_contract") or {}).get("excludes") or ()
+                            )
+                        ],
+                        *[
+                            str(x)
+                            for x in (
+                                (
+                                    (r.get("public_contract") or {}).get("promises")
+                                    or {}
+                                ).values()
+                            )
+                        ],
+                    ),
+                }
+                for r in await self.repo.pending_formal_listings(0, PAGE_SIZE * 4)
+            ],
         }
 
     async def document(self, document_id: str) -> Row:
@@ -2315,6 +2808,16 @@ class MarketAdmin:
             await self.repo.update_listing(
                 item["id"], status="delisted", review_note=note[:2000]
             )
+        for formal in await self.repo.public_formal_by_publisher(
+            publisher_id, category
+        ):
+            await self.repo.update_formal_listing(
+                formal["id"],
+                status="withdrawn",
+                incubation_scope="none",
+                delist_reason="qualification_revoked",
+                review_note=note[:2000],
+            )
 
     async def decide_listing(
         self, listing_id: str, decision: ReviewDecision, reviewer: str
@@ -2409,6 +2912,26 @@ class MarketAdmin:
                     listing_reviewed_by=reviewer,
                     listing_reviewed_at=now,
                 )
+            elif kind == "formal_method":
+                formal = await self.repo.formal_listing(_uuid(target_id))
+                if formal is None:
+                    raise _missing("formal_listing")
+                review_note = f"违规下架：{note}" if violation else note
+                await self.repo.update_formal_listing(
+                    formal["id"],
+                    status="taken_down",
+                    incubation_scope="none",
+                    delist_reason="violation" if violation else "operator_takedown",
+                    review_note=review_note,
+                    reviewed_by=reviewer,
+                    reviewed_at=now,
+                )
+                if violation:
+                    prefix = f"{formal['method_id']}@{formal['version']}"
+                    for t in await self.repo.trades_for_formal(prefix):
+                        await self.repo.update_trade(
+                            t["id"], failure="violation_taken_down"
+                        )
             elif kind == "demand":
                 demand = await self.repo.get_demand(target_id)
                 if demand is None:
@@ -2511,6 +3034,17 @@ class MarketAdmin:
                 ):
                     await self.repo.update_listing(
                         item["id"], status="delisted", review_note="资质已过期，已下架"
+                    )
+                    expired += 1
+                for formal in await self.repo.public_formal_by_publisher(
+                    lic["publisher_id"], lic["category"]
+                ):
+                    await self.repo.update_formal_listing(
+                        formal["id"],
+                        status="withdrawn",
+                        incubation_scope="none",
+                        delist_reason="license_expired",
+                        review_note="资质已过期，已撤回公开",
                     )
                     expired += 1
             purged = await self.repo.purge_documents(now)
@@ -2646,12 +3180,19 @@ def shop_event_view(e: Row, *, for_admin: bool = False) -> Row:
 
 
 def _activity(supply: list[Row]) -> dict[str, Row]:
-    """按人数一数：在架专家、在架知识、公开需求各几样，供给的类目，最近一次改动。"""
+    """按人数一数：在架专家、在架工具、在架知识、公开需求各几样，供给的类目，最近一次改动。"""
     out: dict[str, Row] = {}
     for row in supply:
         act = out.setdefault(
             row["owner"],
-            {"expert": 0, "knowledge": 0, "demand": 0, "categories": set(), "at": None},
+            {
+                "expert": 0,
+                "tool": 0,
+                "knowledge": 0,
+                "demand": 0,
+                "categories": set(),
+                "at": None,
+            },
         )
         act[row["kind"]] += 1
         if row["category"]:
@@ -2659,6 +3200,27 @@ def _activity(supply: list[Row]) -> dict[str, Row]:
         if act["at"] is None or row["at"] > act["at"]:
             act["at"] = row["at"]
     return out
+
+
+def formal_contract_view(
+    raw: dict[str, Any], *, method_kind: str, title: str, purpose: str
+) -> dict[str, Any]:
+    """Normalize stored PublicMethodContract without leaking any private steps."""
+    return {
+        "method_kind": raw.get("method_kind") or method_kind,
+        "title": raw.get("title") or title,
+        "purpose": raw.get("purpose") or purpose,
+        "applies_when": list(raw.get("applies_when") or []),
+        "excludes": list(raw.get("excludes") or []),
+        "promises": dict(raw.get("promises") or {}),
+        "public_inputs": list(raw.get("public_inputs") or []),
+        "what_to_return": list(raw.get("what_to_return") or []),
+        "access_summary": list(raw.get("access_summary") or []),
+        "v0_check_kinds": list(raw.get("v0_check_kinds") or []),
+        "has_blind_review": bool(raw.get("has_blind_review")),
+        "per_action_approval_count": int(raw.get("per_action_approval_count") or 0),
+        "domain_tags": list(raw.get("domain_tags") or []),
+    }
 
 
 def _offer_reason(listing: Row, states: dict[tuple[str, str], str]) -> str | None:
