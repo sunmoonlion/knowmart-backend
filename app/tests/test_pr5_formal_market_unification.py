@@ -84,8 +84,14 @@ def _sample_public_contract(method_kind: str, title: str, purpose: str) -> dict:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offer_kind", "offer_price"),
+    [("formal_expert", "29.00"), ("formal_tool", "12.50")],
+)
 async def test_decoupled_categories_public_detail_shop_trade_demand_and_reviews(
     world: ShopWorld,
+    offer_kind: str,
+    offer_price: str,
 ) -> None:
     await approved_publisher(world)
 
@@ -203,34 +209,36 @@ async def test_decoupled_categories_public_detail_shop_trade_demand_and_reviews(
                 budget=Decimal("50.00"),
             ),
         )
+        offer_id = tool_id if offer_kind == "formal_tool" else expert_id
         resp = await svc.respond(
             SELLER,
             dm["demand_id"],
             ResponseIn(
-                listing_kind="formal_expert",
-                listing_ref=str(expert_id),
-                proposal="可提供正式核验专家",
-                price=Decimal("29.00"),
+                listing_kind=offer_kind,
+                listing_ref=str(offer_id),
+                proposal="可提供报表核验方法",
+                price=Decimal(offer_price),
                 days=1,
             ),
         )
         await svc.choose_response(BUYER, dm["demand_id"], resp["response_id"])
 
-        acq = await svc.acquire_formal(BUYER, expert_id, demand_id=dm["demand_id"])
+        acq = await svc.acquire_formal(BUYER, offer_id, demand_id=dm["demand_id"])
         assert acq["status"] == "acquired"
         assert (await svc.demand(BUYER, dm["demand_id"]))["status"] == "closed"
+        assert await svc.acquire_formal(BUYER, offer_id) == acq
 
         trades = await svc.my_trades(BUYER, "buyer")
         assert len(trades) == 1
-        assert trades[0]["kind"] == "formal_expert"
-        assert trades[0]["price"] == "29.00"
+        assert trades[0]["kind"] == offer_kind
+        assert trades[0]["price"] == offer_price
         assert trades[0]["listing_state"] == "on"
 
-        # Buyer reviews the formal_expert trade -> shows up on formal_detail!
+        # The review belongs to the acquired listing.
         await svc.review(
             BUYER, trades[0]["trade_id"], ReviewIn(rating=5, text="核验非常准确")
         )
-        refreshed = await svc.formal_detail(OTHER, expert_id)
+        refreshed = await svc.formal_detail(OTHER, offer_id)
         assert refreshed["rating"] == {"count": 1, "average": 5.0}
         assert refreshed["reviews"][0]["text"] == "核验非常准确"
 
