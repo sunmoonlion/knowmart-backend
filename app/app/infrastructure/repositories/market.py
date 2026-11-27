@@ -403,25 +403,6 @@ class SqlMarketRepository:
         )
         return [{**_row(row), "tool_category": code} for row, code in rows]
 
-    async def author_incubation_listings(self, subject, after, limit):
-        stmt = select(FormalListing).where(
-            FormalListing.owner_subject == subject,
-            FormalListing.scope == "public",
-            FormalListing.method_kind == "tool",
-            or_(
-                FormalListing.status == "listed",
-                FormalListing.incubation_scope != "none",
-            ),
-        )
-        if after:
-            stmt = stmt.where(FormalListing.id > after)
-        return [
-            _row(r)
-            for r in await self.session.scalars(
-                stmt.order_by(FormalListing.id).limit(limit + 1)
-            )
-        ]
-
     async def incubation_listings(self, query, today, platform_code):
         acquired = (
             select(FormalAcquisition.listing_id)

@@ -759,23 +759,6 @@ class MarketService:
             await self.repo.classify_method(row, code)
             return {"code": code}
 
-    async def author_incubation_listings(self, subject, after, limit=30):
-        async with self.repo.transaction():
-            rows = await self.repo.author_incubation_listings(subject, after, limit)
-            return {
-                "items": [
-                    {
-                        "listing_id": str(row["id"]),
-                        "reference": formal_ref(row),
-                        "title": row["title"],
-                        "scope": row["incubation_scope"],
-                        "listed": row["status"] == "listed",
-                    }
-                    for row in rows[:limit]
-                ],
-                "next": str(rows[limit - 1]["id"]) if len(rows) > limit else None,
-            }
-
     async def permit_incubation(self, subject, listing_id, permission):
         async with self.repo.transaction():
             row = await self.repo.formal_listing(listing_id)

@@ -164,8 +164,10 @@ async def test_decoupled_categories_public_detail_shop_trade_demand_and_reviews(
         await svc.permit_incubation(
             SELLER, tool_id, IncubationPermission(scope="acquired")
         )
-        inc_list = await svc.author_incubation_listings(SELLER, None)
-        assert [i["listing_id"] for i in inc_list["items"]] == [str(tool_id)]
+        owned = (await svc.owner_formal_listings(SELLER, None))["items"]
+        assert [
+            r["listing_id"] for r in owned if r["incubation_scope"] == "acquired"
+        ] == [str(tool_id)]
 
         # 4. Owner can re-classify directory_category without losing regulated status!
         await svc.classify_method(SELLER, expert_id, "analysis.operations")

@@ -155,6 +155,7 @@ async def test_materials_come_from_knowbase_with_the_users_token(market) -> None
 async def test_shop_endpoints(market) -> None:
     """小店：首页列表按店名、类目找，按时间或店名排；我的小店改店名要 CSRF。"""
     async with client() as c:
+        assert (await c.get(f"{BASE}/formal-methods/incubation-permissions")).status_code == 404
         listed = await c.get(f"{BASE}/shops", params={"q": "张", "sort": "name"})
         assert listed.status_code == 200
         assert market.calls[-1] == (

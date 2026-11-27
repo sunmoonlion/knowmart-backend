@@ -1494,10 +1494,14 @@ async def test_formal_acquire_requires_current_authority_and_exact_buyer(world):
     assert (await shared(BUYER))[0]["reference"] == reference and not await shared(
         OTHER
     )
-    assert (await call("author_incubation_listings", SELLER, None))["items"][0][
-        "scope"
-    ] == "acquired"
-    assert not (await call("author_incubation_listings", OTHER, None))["items"]
+    owned = (await call("owner_formal_listings", SELLER, None))["items"]
+    assert (
+        next(row for row in owned if row["listing_id"] == str(listing))[
+            "incubation_scope"
+        ]
+        == "acquired"
+    )
+    assert not (await call("owner_formal_listings", OTHER, None))["items"]
     await call("permit_incubation", SELLER, listing, IncubationPermission(scope="none"))
     assert not await shared(BUYER)
     await call(

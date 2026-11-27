@@ -587,13 +587,6 @@ async def submit_formal(principal: User, body: FormalListingIn, svc: Service):
     return ok(await svc.submit_formal(principal.subject, body))
 
 
-@web_router.get("/formal-methods/incubation-permissions")
-async def author_incubation_listings(
-    principal: User, svc: Service, after: UUID | None = None
-):
-    return ok(await svc.author_incubation_listings(principal.subject, after))
-
-
 @web_router.put("/formal-methods/listings/{listing_id}/incubation-permission")
 async def permit_incubation(
     principal: User, listing_id: UUID, body: IncubationPermission, svc: Service

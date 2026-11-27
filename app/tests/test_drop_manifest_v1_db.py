@@ -17,7 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.knowbot_fakes import manifest
+from tests.knowbot_fakes import historical_manifest
 from tests.test_knowbot_repository_db import OWNER, ROOT
 
 TARGET = "20261028_0010_drop_manifest_v1"
@@ -70,7 +70,11 @@ async def engine():
 
 
 def v1(version: str, name: str = "旧专家") -> dict:
-    doc = {k: v for k, v in manifest(version, name=name).items() if k != "bindings"}
+    doc = {
+        k: v
+        for k, v in historical_manifest(version, name=name).items()
+        if k != "bindings"
+    }
     return {**doc, "schema": "knowbot-manifest/v1", "data_bindings": []}
 
 
@@ -105,12 +109,14 @@ async def test_v1_versions_and_v1_only_experts_are_dropped(engine) -> None:
             "10",
             [
                 ("1", v1("1")),
-                ("2", manifest("2", name="二")),
-                ("3", manifest("3", name="三", tagline="第三版")),
+                ("2", historical_manifest("2", name="二")),
+                ("3", historical_manifest("3", name="三", tagline="第三版")),
                 ("10", v1("10")),
             ],
         )
-        await _bot(c, NEW_ONLY, "lab-new", "1", [("1", manifest("1", name="新"))])
+        await _bot(
+            c, NEW_ONLY, "lab-new", "1", [("1", historical_manifest("1", name="新"))]
+        )
         for ref, version in (("lab-old", "3"), ("lab-mixed", "4"), ("lab-none", "1")):
             await c.execute(
                 text(
