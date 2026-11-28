@@ -62,7 +62,7 @@ FROM (
 ) AS s
 LEFT JOIN (
     SELECT subject,
-           min(NULLIF(btrim(left(coalesce(NULLIF(display_name, ''), username, ''), 40)), ''))
+           min(NULLIF(left(btrim(coalesce(NULLIF(display_name, ''), username, '')), 40), ''))
                AS name
     FROM auth_user GROUP BY subject
 ) AS n ON n.subject = s.subject

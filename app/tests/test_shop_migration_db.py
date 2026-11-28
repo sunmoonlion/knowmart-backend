@@ -60,7 +60,11 @@ async def engine():
 
 async def test_existing_users_get_a_shop_and_downgrade_removes_it(engine) -> None:  # type: ignore[no-untyped-def]
     async with engine.begin() as c:
-        for subject, nickname in (("a", "张三"), ("b", "李四推荐"), ("c", None)):
+        for subject, nickname in (
+            ("a", " " * 15 + "张" * 43),
+            ("b", "李四推荐"),
+            ("c", None),
+        ):
             await c.execute(
                 text(
                     "INSERT INTO demand (id, buyer_subject, kind, title, problem,"
@@ -87,7 +91,7 @@ async def test_existing_users_get_a_shop_and_downgrade_removes_it(engine) -> Non
             )
         ).all()
         assert [tuple(r) for r in shops] == [
-            ("a", "张三", "open"),
+            ("a", "张" * 40, "open"),
             ("b", "小店", "open"),  # 昵称含禁止词
             ("c", "小店", "open"),  # 没有昵称
         ]

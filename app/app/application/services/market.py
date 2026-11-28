@@ -2556,26 +2556,36 @@ class MarketAdmin:
         valid_pairs = [
             (s, m) for s, m in pairs if s and m and len(s) <= 255 and len(m) <= 64
         ]
+        skipped = None
         for start in range(0, len(valid_pairs), OFFER_BATCH):
             batch = valid_pairs[start : start + OFFER_BATCH]
             try:
                 states |= await self.vault.offer_states(batch)
             except AppException as exc:
+                skipped = exc.code
                 if exc.code == "knowbase_unavailable":
-                    return {"checked": 0, "delisted": 0, "skipped": exc.code}
+                    break
                 # 这一批这一轮不算数（不下架），下一轮再核；记下来，不悄悄跳过
                 log.warning(
                     "offer_check_batch_refused code=%s items=%d", exc.code, len(batch)
                 )
                 continue
-        delisted = 0
+        checked = delisted = 0
         for listing in listings:
+            complete = bool(listing["items"]) and all(
+                (str(listing["seller_subject"]), str(item.get("item_id"))) in states
+                for item in listing["items"]
+            )
             reason = _offer_reason(listing, states)
+            if complete or reason is not None:
+                checked += 1
+            else:
+                skipped = skipped or "offer_state_missing"
             if reason is not None and await take_off(
                 self.repo, str(listing["id"]), reason
             ):
                 delisted += 1
-        return {"checked": len(listings), "delisted": delisted, "skipped": None}
+        return {"checked": checked, "delisted": delisted, "skipped": skipped}
 
     async def pending_formal(self, page):
         rows = await self.repo.pending_formal_listings(
@@ -2899,76 +2909,87 @@ class MarketAdmin:
         violation: bool = False,
     ) -> None:
         """平台下架：知识买家那份照旧在；专家下架后不能再请（在跑的跑完）。"""
-        now = self.now()
         async with self.repo.transaction():
-            if kind == "knowledge":
-                found = await self.repo.get_listing(target_id)
-                if found is None:
-                    raise _missing()
-                review_note = f"违规下架：{note}" if violation else note
-                await self.repo.update_listing(
-                    found["id"],
-                    status="taken_down",
-                    review_note=review_note,
-                    reviewed_by=reviewer,
-                    reviewed_at=now,
-                )
-                if violation:
-                    # 违规下架收回买家使用权留痕
-                    trades = await self.repo.trades_for_listing(str(found["id"]))
-                    for t in trades:
-                        await self.repo.update_trade(
-                            t["id"], failure="violation_taken_down"
-                        )
-            elif kind == "expert":
-                bot = await self.repo.get_knowbot(target_id.partition("@")[0])
-                if bot is None:
-                    raise _missing("knowbot")
-                await self.repo.update_knowbot(
-                    bot["id"],
-                    visibility="private",
-                    listing_status="taken_down",
-                    listing_review_note=note,
-                    listing_reviewed_by=reviewer,
-                    listing_reviewed_at=now,
-                )
-            elif kind == "formal_method":
-                formal = await self.repo.formal_listing(_uuid(target_id))
-                if formal is None:
-                    raise _missing("formal_listing")
-                review_note = f"违规下架：{note}" if violation else note
-                await self.repo.update_formal_listing(
-                    formal["id"],
-                    status="taken_down",
-                    incubation_scope="none",
-                    delist_reason="violation" if violation else "operator_takedown",
-                    review_note=review_note,
-                    reviewed_by=reviewer,
-                    reviewed_at=now,
-                )
-                if violation:
-                    prefix = f"{formal['method_id']}@{formal['version']}"
-                    for t in await self.repo.trades_for_formal(prefix):
-                        await self.repo.update_trade(
-                            t["id"], failure="violation_taken_down"
-                        )
-            elif kind == "demand":
-                demand = await self.repo.get_demand(target_id)
-                if demand is None:
-                    raise _missing("demand")
-                await self.repo.update_demand(demand["id"], status="taken_down")
-            elif kind == "response":
-                response = await self.repo.get_response(target_id)
-                if response is None:
-                    raise _missing("response")
-                await self.repo.update_response(response["id"], status="taken_down")
-            elif kind == "message":
-                message = await self.repo.get_message(target_id)
-                if message is None:
-                    raise _missing("message")
-                await self.repo.hide_message(message["id"])
-            else:
-                raise _missing("item")
+            await self._take_down(kind, target_id, note, reviewer, violation=violation)
+
+    async def _take_down(
+        self,
+        kind: str,
+        target_id: str,
+        note: str,
+        reviewer: str,
+        *,
+        violation: bool = False,
+    ) -> None:
+        now = self.now()
+        if kind == "knowledge":
+            found = await self.repo.get_listing(target_id)
+            if found is None:
+                raise _missing()
+            review_note = f"违规下架：{note}" if violation else note
+            await self.repo.update_listing(
+                found["id"],
+                status="taken_down",
+                review_note=review_note,
+                reviewed_by=reviewer,
+                reviewed_at=now,
+            )
+            if violation:
+                # 违规下架收回买家使用权留痕
+                trades = await self.repo.trades_for_listing(str(found["id"]))
+                for t in trades:
+                    await self.repo.update_trade(
+                        t["id"], failure="violation_taken_down"
+                    )
+        elif kind == "expert":
+            bot = await self.repo.get_knowbot(target_id.partition("@")[0])
+            if bot is None:
+                raise _missing("knowbot")
+            await self.repo.update_knowbot(
+                bot["id"],
+                visibility="private",
+                listing_status="taken_down",
+                listing_review_note=note,
+                listing_reviewed_by=reviewer,
+                listing_reviewed_at=now,
+            )
+        elif kind == "formal_method":
+            formal = await self.repo.formal_listing(_uuid(target_id))
+            if formal is None:
+                raise _missing("formal_listing")
+            review_note = f"违规下架：{note}" if violation else note
+            await self.repo.update_formal_listing(
+                formal["id"],
+                status="taken_down",
+                incubation_scope="none",
+                delist_reason="violation" if violation else "operator_takedown",
+                review_note=review_note,
+                reviewed_by=reviewer,
+                reviewed_at=now,
+            )
+            if violation:
+                prefix = f"{formal['method_id']}@{formal['version']}"
+                for t in await self.repo.trades_for_formal(prefix):
+                    await self.repo.update_trade(
+                        t["id"], failure="violation_taken_down"
+                    )
+        elif kind == "demand":
+            demand = await self.repo.get_demand(target_id)
+            if demand is None:
+                raise _missing("demand")
+            await self.repo.update_demand(demand["id"], status="taken_down")
+        elif kind == "response":
+            response = await self.repo.get_response(target_id)
+            if response is None:
+                raise _missing("response")
+            await self.repo.update_response(response["id"], status="taken_down")
+        elif kind == "message":
+            message = await self.repo.get_message(target_id)
+            if message is None:
+                raise _missing("message")
+            await self.repo.hide_message(message["id"])
+        else:
+            raise _missing("item")
 
     async def reports(self, status: str | None) -> list[Row]:
         return [report_view(r) for r in await self.repo.reports(status)]
@@ -2976,17 +2997,17 @@ class MarketAdmin:
     async def decide_report(
         self, report_id: str, decision: ReportDecision, reviewer: str
     ) -> None:
-        found = await self.repo.get_report(report_id)
-        if found is None or found["status"] != "open":
-            raise _missing("report")
-        if decision.uphold:
-            await self.take_down(
-                found["target_kind"],
-                found["target_id"],
-                decision.note or found["reason"],
-                reviewer,
-            )
         async with self.repo.transaction():
+            found = await self.repo.get_report(report_id, for_update=True)
+            if found is None or found["status"] != "open":
+                raise _missing("report")
+            if decision.uphold:
+                await self._take_down(
+                    found["target_kind"],
+                    found["target_id"],
+                    decision.note or found["reason"],
+                    reviewer,
+                )
             await self.repo.update_report(
                 found["id"],
                 status="upheld" if decision.uphold else "dismissed",

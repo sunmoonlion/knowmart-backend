@@ -525,7 +525,7 @@ async def test_a_refused_batch_is_logged_and_its_listings_stay_up(
         return await admin.check_offers()
 
     with caplog.at_level("WARNING"):
-        assert await world.run(check) == {"checked": 1, "delisted": 0, "skipped": None}
+        assert await world.run(check) == {"checked": 0, "delisted": 0, "skipped": "items_invalid"}
     assert any(
         "offer_check_batch_refused" in r.getMessage()
         and "items_invalid" in r.getMessage()
@@ -744,3 +744,31 @@ async def test_purchase_replay_and_resale_use_only_delivered_content(world):
         )
     )
     assert item["status"] == "draft"
+
+
+async def test_report_decision_and_target_roll_back_together(world):
+    from unittest.mock import patch
+    from app.domain.market import ReportDecision, ReportIn
+
+    row = await world.run(lambda svc, _: svc.create_demand(BUYER, demand()))
+    target = row["demand_id"]
+    case = await world.run(
+        lambda svc, _: svc.report(
+            OTHER, ReportIn(target_kind="demand", target_id=target, reason="核实请求")
+        )
+    )
+    async with world.db() as session:
+        admin = world.admin(session)
+        with patch.object(
+            admin.repo,
+            "update_report",
+            side_effect=RuntimeError("decision write interrupted"),
+        ):
+            with pytest.raises(RuntimeError, match="interrupted"):
+                await admin.decide_report(
+                    case["report_id"], ReportDecision(uphold=True), "operator"
+                )
+    async with world.db() as session:
+        repo = world.admin(session).repo
+        assert (await repo.get_demand(target))["status"] == "open"
+        assert (await repo.get_report(case["report_id"]))["status"] == "open"

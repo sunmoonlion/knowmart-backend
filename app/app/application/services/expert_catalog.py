@@ -81,9 +81,9 @@ def _usable(version: KnowbotVersionRecord, owned: bool) -> bool:
     )
 
 
-def _latest(bot: KnowbotRecord, owned: bool = False) -> KnowbotVersionRecord | None:
+def _latest(bot: KnowbotRecord, viewer: str) -> KnowbotVersionRecord | None:
     """最新的可用版；都停用了就是最新的一版（还能看，请不了）。"""
-    active = [v for v in bot.versions if _usable(v, owned)]
+    active = [v for v in bot.versions if _usable(v, bot.owner_subject == viewer)]
     pool = active or list(bot.versions)
     return max(pool, key=lambda v: int(v.version)) if pool else None
 
@@ -110,8 +110,8 @@ class ExpertCatalog:
             )
         ]
 
-    def _matches(self, bot: KnowbotRecord, query: CatalogQuery) -> bool:
-        latest = _latest(bot)
+    def _matches(self, bot: KnowbotRecord, query: CatalogQuery, viewer: str) -> bool:
+        latest = _latest(bot, viewer)
         if latest is None:
             return False
         words = (query.q or "").strip().lower()
@@ -124,7 +124,7 @@ class ExpertCatalog:
 
     def _item(self, bot: KnowbotRecord, owner_subject: str) -> dict[str, Any]:
         owned = bot.owner_subject == owner_subject
-        latest = _latest(bot, owned)
+        latest = _latest(bot, owner_subject)
         assert latest is not None
         return {
             "knowbot_id": str(bot.id),
@@ -140,7 +140,9 @@ class ExpertCatalog:
     async def list(self, owner_subject: str, query: CatalogQuery) -> dict[str, Any]:
         """首页：筛过、排过、分好页的专家，加上按同样条件（类目除外）数出的类目。"""
         candidates = [
-            b for b in await self._visible(owner_subject) if self._matches(b, query)
+            b
+            for b in await self._visible(owner_subject)
+            if self._matches(b, query, owner_subject)
         ]
         counted = _category_tree(candidates)
         chosen = [b for b in candidates if in_category(b.category, query.category)]
@@ -148,7 +150,7 @@ class ExpertCatalog:
             chosen.sort(key=lambda b: b.name)
         else:
             chosen.sort(
-                key=lambda b: _latest(b).delivered_at,  # type: ignore[union-attr]
+                key=lambda b: _latest(b, owner_subject).delivered_at,  # type: ignore[union-attr]
                 reverse=True,
             )
         page = max(1, query.page)
@@ -169,7 +171,7 @@ class ExpertCatalog:
             items.extend(
                 self._item(bot, viewer)
                 for bot in await self._visible(viewer)
-                if self._matches(bot, query)
+                if self._matches(bot, query, viewer)
             )
         counts = Counter(item["category"]["code"] for item in items)
         chosen = [
@@ -282,7 +284,9 @@ class ExpertCatalog:
         }
 
     async def categories(self, owner_subject: str) -> list[dict[str, Any]]:
-        visible = [b for b in await self._visible(owner_subject) if _latest(b)]
+        visible = [
+            b for b in await self._visible(owner_subject) if _latest(b, owner_subject)
+        ]
         return _category_tree(visible)
 
     async def detail(
@@ -313,7 +317,7 @@ class ExpertCatalog:
                 raise _not_found()
             selected = next((v for v in bot.versions if v.version == version), None)
         else:
-            selected = _latest(bot, owned)
+            selected = _latest(bot, owner_subject)
         if selected is None:
             raise _not_found()
         outcomes = (

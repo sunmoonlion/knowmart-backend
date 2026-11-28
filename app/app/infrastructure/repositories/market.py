@@ -1647,9 +1647,20 @@ class SqlMarketRepository:
         await self.session.refresh(row)
         return _row(row)
 
-    async def get_report(self, report_id: str) -> dict[str, Any] | None:
+    async def get_report(
+        self, report_id: str, *, for_update: bool = False
+    ) -> dict[str, Any] | None:
         key = _id(report_id)
-        row = await self.session.get(MarketReport, key) if key else None
+        row = (
+            await self.session.get(
+                MarketReport,
+                key,
+                with_for_update=for_update,
+                populate_existing=for_update,
+            )
+            if key
+            else None
+        )
         return None if row is None else _row(row)
 
     async def reports(self, status: str | None) -> list[dict[str, Any]]:

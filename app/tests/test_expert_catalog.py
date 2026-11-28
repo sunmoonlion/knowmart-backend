@@ -353,3 +353,31 @@ async def test_a_version_reviewed_for_self_use_stays_with_its_owner() -> None:
         runtime="knowbench",
     )
     assert got.version.version == "1"
+
+
+@pytest.mark.asyncio
+async def test_recent_filter_sort_and_card_use_same_viewer_version():
+    from unittest.mock import AsyncMock
+
+    repo = MemoryKnowbots()
+    bot = await deliver(repo, ME, "held", name="Newest")
+    await deliver(repo, ME, "held", version="2", name="Newest")
+    older = await deliver(repo, ME, "other", name="Yesterday")
+    for key, days, status in [
+        ((bot, "1"), 40, "active"),
+        ((bot, "2"), 0, "held"),
+        ((older, "1"), 1, "active"),
+    ]:
+        repo.versions[key] = replace(
+            repo.versions[key], delivered_at=NOW - timedelta(days=days), status=status
+        )
+    market = AsyncMock()
+    market.catalog_methods.return_value = [], {}
+    svc = catalog(repo)
+    query = CatalogQuery(updated="7d")
+    for page in [
+        await svc.list(ME, query),
+        await svc.method_directory(ME, query, "expert", market),
+    ]:
+        assert [item["version"] for item in page["items"]] == ["2", "1"]
+        assert page["items"][0]["updated_at"] == NOW.isoformat()
