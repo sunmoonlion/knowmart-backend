@@ -327,8 +327,8 @@ class ExpertCatalog:
         )
         return {
             "knowbot_id": str(bot.id),
-            "name": bot.name,
-            "tagline": bot.tagline,
+            "name": selected.manifest["name"],
+            "tagline": selected.manifest.get("tagline", ""),
             "category": category_view(bot.category),
             "owned": owned,
             "version": selected.version,

@@ -139,6 +139,7 @@ class MemoryKnowbots:
         manifest: dict[str, Any],
         delivery_id: str,
         public_allowed: bool = False,
+        delivery_options: dict[str, Any] | None = None,
     ) -> KnowbotVersionRecord:
         record = KnowbotVersionRecord(
             knowbot_id=knowbot_id,
@@ -149,6 +150,7 @@ class MemoryKnowbots:
             delivered_at=datetime.now(UTC),
             manifest=manifest,
             public_allowed=public_allowed,
+            delivery_options=delivery_options,
         )
         self.versions[(knowbot_id, version)] = record
         return record
@@ -317,6 +319,8 @@ class MemoryKnowbots:
         self, knowbot_id: uuid.UUID, version: str, reason: str | None, at: datetime
     ) -> bool:
         old = self.versions[(knowbot_id, version)]
+        if not old.public_allowed:
+            return False
         if reason is None:
             if old.status != "held":
                 return False

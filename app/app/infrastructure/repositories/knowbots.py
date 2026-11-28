@@ -42,6 +42,7 @@ def _version(row: KnowbotVersion) -> KnowbotVersionRecord:
         digest=row.digest,
         status=row.status,  # type: ignore[arg-type]
         delivery_id=row.delivery_id,
+        delivery_options=row.delivery_options,
         delivered_at=row.delivered_at,
         manifest=row.manifest,
         public_allowed=row.public_allowed,
@@ -206,6 +207,7 @@ class SqlKnowbotRepository:
         manifest: dict[str, Any],
         delivery_id: str,
         public_allowed: bool = False,
+        delivery_options: dict[str, Any] | None = None,
     ) -> KnowbotVersionRecord:
         row = KnowbotVersion(
             knowbot_id=knowbot_id,
@@ -215,6 +217,7 @@ class SqlKnowbotRepository:
             delivery_id=delivery_id,
             status="active",
             public_allowed=public_allowed,
+            delivery_options=delivery_options,
         )
         self.session.add(row)
         await self.session.flush()
@@ -458,6 +461,7 @@ class SqlKnowbotRepository:
         where = [
             KnowbotVersion.knowbot_id == knowbot_id,
             KnowbotVersion.version == version,
+            KnowbotVersion.public_allowed.is_(True),
         ]
         if reason is None:
             values: dict[str, Any] = {

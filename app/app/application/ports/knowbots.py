@@ -30,6 +30,7 @@ class KnowbotVersionRecord:
     public_allowed: bool = False  # knowlab 把这一版审成公开（Fable 评审 P2-2）
     held_reason: str | None = None  # 待处理的原因（delivery.HOLD_REASONS）
     held_at: datetime | None = None
+    delivery_options: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ class KnowbotRepository(Protocol):
         manifest: dict[str, Any],
         delivery_id: str,
         public_allowed: bool = False,
+        delivery_options: dict[str, Any] | None = None,
     ) -> KnowbotVersionRecord: ...
 
     async def set_current(

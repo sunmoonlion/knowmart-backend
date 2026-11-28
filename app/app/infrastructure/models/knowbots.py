@@ -169,6 +169,9 @@ class KnowbotVersion(Base):
     version: Mapped[str] = mapped_column(String(16), primary_key=True)
     digest: Mapped[str] = mapped_column(String(80), nullable=False)
     manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    delivery_options: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
     delivery_id: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
     delivered_at: Mapped[datetime] = mapped_column(

@@ -157,7 +157,19 @@ class KnowbotService:
         async with self.repo.transaction():
             prior = await self.repo.find_delivery(delivery_id)
             if prior is not None:
-                bot_then = await self.repo.get_knowbot(prior.version.knowbot_id)
+                options = prior.version.delivery_options
+                if options is None:
+                    # Earlier rows lack an immutable delivery options receipt.
+                    bot_then = await self.repo.get_knowbot(prior.version.knowbot_id)
+                    same_options = prior.version.public_allowed == request_public and (
+                        category is None
+                        or (bot_then is not None and bot_then.category == category)
+                    )
+                else:
+                    same_options = options == {
+                        "public": request_public,
+                        "category": category,
+                    }
                 # 重放要整件一样：公开与否、类目也比（knowlab 撤回后再交、单号撞上时
                 # 别把自用错成公开）
                 same = (
@@ -165,11 +177,7 @@ class KnowbotService:
                     and prior.source_ref == knowbot_ref
                     and prior.version.version == parsed.version
                     and prior.version.digest == digest
-                    and prior.version.public_allowed == request_public
-                    and (
-                        category is None
-                        or (bot_then is not None and bot_then.category == category)
-                    )
+                    and same_options
                 )
                 if not same:
                     raise ConcurrencyConflictError(
@@ -234,6 +242,7 @@ class KnowbotService:
                 manifest=parsed.canonical(),
                 delivery_id=delivery_id,
                 public_allowed=request_public,
+                delivery_options={"public": request_public, "category": category},
             )
             if bot.current_version is None or int(parsed.version) > int(
                 bot.current_version
@@ -290,7 +299,10 @@ class KnowbotService:
         ):
             raise _not_found()
         return SummonedVersion(
-            knowbot_id=bot.id, name=bot.name, tagline=bot.tagline, version=found
+            knowbot_id=bot.id,
+            name=found.manifest["name"],
+            tagline=found.manifest.get("tagline", ""),
+            version=found,
         )
 
     async def _summonable(self, subject: str, knowbot_id: str) -> KnowbotRecord:
