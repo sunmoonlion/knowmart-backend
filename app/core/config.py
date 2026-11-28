@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.domain.cross_app import Source, Target, parse_sources, parse_targets
+from app.domain.cross_app import APP, Source, Target, parse_sources, parse_targets
 
 BrowserSurface = Literal["admin", "web"]
 
@@ -108,7 +108,8 @@ class Settings(BaseSettings):
     web_frontend_allowed_origins: str | None = None
     web_auth_default_return_to: str = "/zh-CN/dashboard"
     web_auth_allowed_return_paths: str = (
-        "/zh-CN/dashboard,/en/dashboard,/zh-CN/login,/en/login,/zh-CN/knowbots,/en/knowbots,/zh-CN/knowledge,/en/knowledge"
+        "/zh-CN/dashboard,/en/dashboard,/zh-CN/login,/en/login,"
+        "/zh-CN/knowbots,/en/knowbots,/zh-CN/knowledge,/en/knowledge"
     )
     web_frontend_default_locale: str = "zh-CN"
 
@@ -185,11 +186,17 @@ class Settings(BaseSettings):
             return value
         normalized = value.replace("postgresql://", "postgresql+asyncpg://", 1)
         parts = urlsplit(normalized)
-        query = [
-            (key, item)
-            for key, item in parse_qsl(parts.query, keep_blank_values=True)
-            if key != "sslmode"
-        ]
+        query = []
+        ssl_policy = None
+        for key, item in parse_qsl(parts.query, keep_blank_values=True):
+            if key in {"ssl", "sslmode"}:
+                if ssl_policy is not None and ssl_policy != item:
+                    raise ValueError("Conflicting database SSL settings")
+                if ssl_policy is None:
+                    query.append(("ssl", item))
+                ssl_policy = item
+            else:
+                query.append((key, item))
         return urlunsplit(
             (
                 parts.scheme,
@@ -204,10 +211,7 @@ class Settings(BaseSettings):
     def validate_base_security(self) -> Settings:
         if not self.deployment_id.strip():
             raise ValueError("DEPLOYMENT_ID cannot be empty")
-        if not self.app_slug or any(
-            char not in "abcdefghijklmnopqrstuvwxyz0123456789-"
-            for char in self.app_slug
-        ):
+        if not APP.fullmatch(self.app_slug):
             raise ValueError("APP_SLUG must use lowercase letters, digits and hyphens")
         if any(item == "*" for item in self._split_csv(self.allowed_hosts)):
             if self.is_production:
@@ -264,7 +268,8 @@ class Settings(BaseSettings):
             or parsed.fragment
         ):
             raise ValueError(f"{field} must contain origin-only HTTP(S) URLs")
-        return f"{parsed.scheme}://{parsed.hostname}{port}"
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        return f"{parsed.scheme}://{host}{port}"
 
     @staticmethod
     def _validate_relative_path(value: str, *, field: str) -> str:
@@ -442,8 +447,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 "CASDOOR_DISCOVERY_URL must use the standard discovery path"
             )
-        discovery_origin = f"{discovery.scheme}://{discovery.hostname}" + (
-            f":{discovery.port}" if discovery.port is not None else ""
+        discovery_origin = self._strict_origin(
+            urlunsplit((discovery.scheme, discovery.netloc, "", "", "")), field="origin"
         )
         if discovery_origin != provider_origin:
             raise ValueError(
@@ -481,8 +486,9 @@ class Settings(BaseSettings):
                 raise ValueError(
                     f"{item.upper()}_CASDOOR_REDIRECT_URI must end at {expected_path}"
                 )
-            redirect_origin = f"{redirect.scheme}://{redirect.hostname}" + (
-                f":{redirect.port}" if redirect.port is not None else ""
+            redirect_origin = self._strict_origin(
+                urlunsplit((redirect.scheme, redirect.netloc, "", "", "")),
+                field="origin",
             )
             if redirect_origin != profile.frontend_base_url:
                 raise ValueError(
@@ -562,6 +568,10 @@ class Settings(BaseSettings):
                 len(item) > 128 for item in normalized
             ):
                 raise ValueError("SERVICE_AUTH_SUBJECT_BINDINGS_JSON is invalid")
+            if subject.strip() in result:
+                raise ValueError(
+                    "SERVICE_AUTH_SUBJECT_BINDINGS_JSON has a duplicate subject"
+                )
             result[subject.strip()] = normalized
         return result
 
