@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import case, false, func, or_, select, tuple_, update
+from sqlalchemy import case, false, func, or_, select, text, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1205,9 +1205,17 @@ class SqlMarketRepository:
         await self.session.refresh(row)
         return _row(row)
 
-    async def get_demand(self, demand_id: str) -> dict[str, Any] | None:
+    async def get_demand(
+        self, demand_id: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
         key = _id(demand_id)
-        row = await self.session.get(Demand, key) if key else None
+        row = (
+            await self.session.get(
+                Demand, key, with_for_update=lock, populate_existing=lock
+            )
+            if key
+            else None
+        )
         return None if row is None else _row(row)
 
     async def update_demand(self, demand_id: uuid.UUID, **fields: Any) -> None:
@@ -1269,9 +1277,17 @@ class SqlMarketRepository:
         await self.session.refresh(row)
         return _row(row)
 
-    async def get_response(self, response_id: str) -> dict[str, Any] | None:
+    async def get_response(
+        self, response_id: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
         key = _id(response_id)
-        row = await self.session.get(DemandResponse, key) if key else None
+        row = (
+            await self.session.get(
+                DemandResponse, key, with_for_update=lock, populate_existing=lock
+            )
+            if key
+            else None
+        )
         return None if row is None else _row(row)
 
     async def responses_to(self, demand_id: uuid.UUID) -> list[dict[str, Any]]:
@@ -1326,19 +1342,17 @@ class SqlMarketRepository:
         ).scalars()
         return [_row(r) for r in rows]
 
-    async def has_bought_expert(self, buyer: str, listing_ref: str) -> bool:
+    async def expert_trade(self, buyer: str, listing_ref: str) -> dict[str, Any] | None:
         row = (
             await self.session.execute(
-                select(Trade.id)
-                .where(
+                select(Trade).where(
                     Trade.buyer_subject == buyer,
                     Trade.listing_ref == listing_ref,
                     Trade.kind == "expert",
                 )
-                .limit(1)
             )
         ).scalar_one_or_none()
-        return row is not None
+        return _row(row) if row is not None else None
 
     async def trades_for_formal(self, method_ref_prefix: str) -> list[dict[str, Any]]:
         rows = (
@@ -1516,14 +1530,19 @@ class SqlMarketRepository:
         """
         rows = (
             await self.session.execute(
-                select(Trade.planned).where(
+                select(Trade.granted).where(
                     Trade.buyer_subject == buyer,
                     Trade.kind == "knowledge",
                     Trade.resale_allowed.is_not(True),
                 )
             )
         ).scalars()
-        return {str(c.get("sha256")) for planned in rows for c in planned or []}
+        return {
+            item["sha256"]
+            for granted in rows
+            for item in granted or []
+            if item.get("sha256")
+        }
 
     async def add_review(self, fields: dict[str, Any]) -> dict[str, Any]:
         row = TradeReview(**fields)
@@ -1606,6 +1625,10 @@ class SqlMarketRepository:
         return None if row is None else _row(row)
 
     async def add_rules(self, body: str, created_by: str) -> dict[str, Any]:
+        # Serialize the first version as well as later appends; readers can still read.
+        await self.session.execute(
+            text("LOCK TABLE house_rules IN SHARE ROW EXCLUSIVE MODE")
+        )
         current = await self.current_rules()
         row = HouseRules(
             version=(current["version"] if current else 0) + 1,

@@ -152,6 +152,13 @@ async def test_decoupled_categories_public_detail_shop_trade_demand_and_reviews(
         assert {str(tool_id), str(expert_id)} <= queued_ids
 
         await svc.review_formal(OPS, tool_id, ReviewDecision(approve=True))
+        assert (await svc.my_shop(SELLER))["shop"]["listed"] is True
+        single = (await svc.shops(q=None, category=None, sort="time", page=1))["items"]
+        assert len(single) == 1 and single[0]["tools"] == 1
+        shop = await svc.shop(BUYER, single[0]["shop_id"])
+        assert [entry["listing_id"] for entry in shop["formal_methods"]] == [
+            str(tool_id)
+        ]
         await svc.review_formal(OPS, expert_id, ReviewDecision(approve=True))
 
         # 3. permit_incubation rejects formal experts and accepts formal tools!

@@ -85,6 +85,8 @@ class Strict(BaseModel):
 
 
 class SummonReturnIn(Strict):
+    demand_id: UUID | None = None
+    response_id: UUID | None = None
     source: str = Field(alias="from", min_length=1, max_length=64)
     ref: str | None = Field(default=None, max_length=256)
 
@@ -343,6 +345,8 @@ async def summon_return(
         buyer=session.principal.subject,
         knowbot_id=str(found.knowbot_id),
         version=found.version.version,
+        demand_id=str(body.demand_id) if body.demand_id else None,
+        response_id=str(body.response_id) if body.response_id else None,
     )
     return JSONResponse(
         content={

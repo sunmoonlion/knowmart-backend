@@ -376,9 +376,25 @@ async def test_summon_return_goes_back_to_the_registered_place(wired) -> None:
             "knowbot": [f"{knowbot}@1"],
         }
         # 交给市场判是不是请别人的（是才记成交）
-        assert SUMMONS.calls == [
-            {"buyer": OWNER, "knowbot_id": knowbot, "version": "1"}
-        ]
+        standalone = {
+            "buyer": OWNER,
+            "knowbot_id": knowbot,
+            "version": "1",
+            "demand_id": None,
+            "response_id": None,
+        }
+        assert SUMMONS.calls == [standalone]
+        chosen = {
+            "demand_id": "a88ffbfc-017a-403d-b3ac-e579752d99a0",
+            "response_id": "b21afb70-3be7-4682-8c4d-e11fb2362937",
+        }
+        linked = await c.post(
+            url, json={"from": "knowbench", **chosen}, headers=headers
+        )
+        assert linked.status_code == 200 and SUMMONS.calls[-1] == {
+            **standalone,
+            **chosen,
+        }
         unknown = await c.post(url, json={"from": "evil", "ref": "x"}, headers=headers)
         assert unknown.status_code == 400
         assert (await c.post(url, json={"from": "knowbench"})).status_code == 403

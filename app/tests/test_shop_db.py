@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from decimal import Decimal
 from typing import Any
 
@@ -669,3 +671,76 @@ async def test_platform_incubation_access_tracks_verified_publisher(world):
         assert (await svc.incubation_tools(query))["items"] == []
 
     await world.run(work)
+
+
+async def test_single_chosen_response_and_distinct_concurrent_rules(world):
+    did = (await world.run(lambda svc, _: svc.create_demand(BUYER, demand())))[
+        "demand_id"
+    ]
+    ids = [
+        (
+            await world.run(
+                lambda svc, _, seller=seller: svc.respond(
+                    seller, did, ResponseIn(proposal="可交")
+                )
+            )
+        )["response_id"]
+        for seller in (SELLER, OTHER)
+    ]
+    ready = asyncio.Barrier(2)
+
+    async def choose(rid):
+        async with world.db() as session:
+            await ready.wait()
+            return await world.svc(session).choose_response(BUYER, did, rid)
+
+    results = await asyncio.gather(
+        *(choose(rid) for rid in ids), return_exceptions=True
+    )
+    assert sum(isinstance(result, ConcurrencyConflictError) for result in results) == 1
+    final = await world.run(lambda svc, _: svc.demand(BUYER, did))
+    assert [
+        row["response_id"] for row in final["responses"] if row["status"] == "chosen"
+    ] == [final["chosen_response_id"]]
+    assert {row["status"] for row in final["responses"]} == {"chosen", "not_chosen"}
+
+    async def publish(body):
+        async with world.db() as session:
+            await ready.wait()
+            return await world.admin(session).publish_rules(body, OPS)
+
+    versions = await asyncio.gather(publish("A"), publish("B"))
+    a, b = sorted(row["version"] for row in versions)
+    assert b == a + 1
+
+
+async def test_purchase_replay_and_resale_use_only_delivered_content(world):
+    await approved_publisher(world)
+    listing = await listed_knowledge(
+        world, items=[{"item_id": "d1"}, {"item_id": "d2"}]
+    )
+    world.vault.offered["d1"].update(sha256="c" * 64, version_no=2)
+    world.vault.gone = {"d2"}
+    command = BuyIn(request_id="partial-receipt")
+    result = await world.run(lambda svc, _: svc.buy(BUYER, listing, command))
+    assert result["status"] == "failed"
+    trade = await world.run(
+        lambda svc, _: svc.repo.get_trade(uuid.UUID(result["trade_id"]))
+    )
+    assert [(row["version_no"], row["sha256"]) for row in trade["granted"]] == [
+        (2, "c" * 64)
+    ]
+    world.vault.gone.clear()
+    again = await world.run(lambda svc, _: svc.buy(BUYER, listing, command))
+    assert again == result
+    assert len(world.vault.holdings) == 1
+    assert await world.run(lambda svc, _: svc.repo.bought_without_resale(BUYER)) == {
+        "c" * 64
+    }
+    world.vault.offered["independent"] = dict(world.vault.offered["d2"])
+    item = await world.run(
+        lambda svc, _: svc.create_listing(
+            BUYER, knowledge(items=[{"item_id": "independent"}]), token
+        )
+    )
+    assert item["status"] == "draft"

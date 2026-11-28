@@ -104,7 +104,8 @@ class Vault:
             self.holdings[key] = {
                 "material_id": material,
                 "buyer": kw["buyer"],
-                "version_no": 1,
+                "version_no": self.offered[material].get("version_no", 1),
+                "sha256": self.offered[material]["sha256"],
                 "license": "sale" if kw["resale_allowed"] else "self",
             }
         return self.holdings[key]
@@ -1114,7 +1115,42 @@ async def test_a_chosen_demand_can_be_settled_or_closed(
             ResponseIn(listing_kind="expert", listing_ref=f"{bot}@1", proposal="请它"),
         )
         await svc.choose_response(BUYER, ask["demand_id"], pitch["response_id"])
-        made = await svc.record_summon(buyer=BUYER, knowbot_id=str(bot), version="1")
+        another = await svc.create_demand(BUYER, demand_in("expert", "另一项委托"))
+        other_offer = await svc.respond(
+            SELLER,
+            another["demand_id"],
+            ResponseIn(
+                listing_kind="expert", listing_ref=f"{bot}@1", proposal="同一专家"
+            ),
+        )
+        await svc.choose_response(
+            BUYER, another["demand_id"], other_offer["response_id"]
+        )
+        settlement = dict(demand_id=ask["demand_id"], response_id=pitch["response_id"])
+        with pytest.raises(BadRequestError, match="chosen response"):
+            await svc.record_summon(
+                buyer=BUYER, knowbot_id=str(bot), version="2", **settlement
+            )
+        with pytest.raises(BadRequestError, match="chosen response"):
+            await svc.record_summon(
+                buyer=BUYER,
+                knowbot_id=str(bot),
+                version="1",
+                demand_id=ask["demand_id"],
+                response_id=other_offer["response_id"],
+            )
+        separate = await svc.record_summon(
+            buyer=BUYER, knowbot_id=str(bot), version="2"
+        )
+        assert separate["demand_id"] is None
+        made = await svc.record_summon(
+            buyer=BUYER, knowbot_id=str(bot), version="1", **settlement
+        )
+        assert (await svc.demand(BUYER, another["demand_id"]))["status"] == "chosen"
+        repeated = await svc.record_summon(
+            buyer=BUYER, knowbot_id=str(bot), version="1", **settlement
+        )
+        assert repeated == made
         assert made is not None and made["demand_id"] == ask["demand_id"]
         assert (await svc.demand(BUYER, ask["demand_id"]))["status"] == "closed"
         # 选定了但不在这里成交：买家直接关

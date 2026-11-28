@@ -1517,22 +1517,39 @@ class MarketService:
         ]
 
     async def record_summon(
-        self, *, buyer: str, knowbot_id: str, version: str
+        self,
+        *,
+        buyer: str,
+        knowbot_id: str,
+        version: str,
+        demand_id: str | None = None,
+        response_id: str | None = None,
     ) -> Row | None:
-        """有人「请」了别人的专家：记一笔成交（价格按条目上写的，本期不收钱）。自己请自己的不记。
-
-        买家有一条选定了的需求、选中的那家附的正是这位专家：这笔成交记在那条需求上、关掉
-        需求（Fable 评审 P2-9）。
-        """
+        """按买家与版本记一次成交。只有委托人显式选择的响应才能随成交结案。"""
         bot = await self.repo.get_knowbot(knowbot_id)
         if bot is None or bot["owner_subject"] == buyer:
             return None
         ref = f"{bot['id']}@{version}"
-        # 同一个人请同一版只记一次：按部分唯一索引防并发多记
-        if await self.repo.has_bought_expert(buyer, ref):
+        if (
+            demand_id is None
+            and response_id is None
+            and await self.repo.expert_trade(buyer, ref) is not None
+        ):
             return None
-        demand_id = await self._demand_offering(buyer, str(bot["id"]))
         async with self.repo.transaction():
+            if (demand_id is None) != (response_id is None):
+                raise BadRequestError(
+                    "A demand and its response are required together",
+                    code="not_the_chosen_offer",
+                )
+            chosen = await self._chosen_demand(
+                buyer,
+                demand_id,
+                "expert",
+                ref,
+                response_id=response_id,
+                seller=bot["owner_subject"],
+            )
             trade = await self.repo.add_trade(
                 {
                     "kind": "expert",
@@ -1542,12 +1559,17 @@ class MarketService:
                     "title": f"{bot['name']} 第 {version} 版",
                     "price": bot["price"],
                     "granted": [],
-                    "demand_id": demand_id,
+                    "demand_id": chosen,
                     "seller_publisher": await self._publisher_then(bot["publisher_id"]),
                 }
             )
-            if demand_id is not None:
-                await self.repo.update_demand(demand_id, status="closed")
+            if chosen is not None:
+                if trade["demand_id"] != chosen:
+                    raise _conflict(
+                        "This version already has a separate trade",
+                        "expert_already_acquired",
+                    )
+                await self.repo.update_demand(chosen, status="closed")
             return trade_view(trade, viewer=buyer)
 
     async def expert_refs_bought(self, buyer: str) -> set[str]:
@@ -1591,19 +1613,6 @@ class MarketService:
                 }
             )
         return out
-
-    async def _demand_offering(self, buyer: str, knowbot_id: str) -> uuid.UUID | None:
-        for demand in await self.repo.demands_of(buyer):
-            if demand["status"] != "chosen" or not demand["chosen_response_id"]:
-                continue
-            response = await self.repo.get_response(str(demand["chosen_response_id"]))
-            if (
-                response is not None
-                and response["listing_kind"] == "expert"
-                and str(response["listing_ref"] or "").partition("@")[0] == knowbot_id
-            ):
-                return demand["id"]
-        return None
 
     async def expert_market(self, knowbot_id: str, viewer: str | None = None) -> Row:
         """专家详情页上的市场部分：价格、评价。非本人且停店时回 404。"""
@@ -1792,7 +1801,7 @@ class MarketService:
             raise _conflict(
                 "This request id was used for another purchase", "request_reused"
             )
-        if trade["status"] != "done":
+        if trade["status"] == "granting":
             trade = await self._grant(trade)
         return trade_view(trade, viewer=subject)
 
@@ -1847,55 +1856,61 @@ class MarketService:
         """接着建没建完的使用权，逐份记下；都建好记成交、关需求。"""
         vault = self._need_vault()
         for n, item in enumerate(trade["planned"]):
-            if n < len(trade["granted"]):
-                continue
-            try:
-                got = await vault.purchase(
-                    seller=trade["seller_subject"],
-                    material_id=str(item["seller_item_id"]),
-                    buyer=trade["buyer_subject"],
-                    transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
-                    resale_allowed=trade["resale_allowed"] is True,
-                )
-            except (NotFoundError, ConcurrencyConflictError) as exc:
-                # 卖家那份没了、或上架后把许可改低了：这一笔办不下去
-                if exc.code not in ("item_gone", "item_not_for_sale"):
-                    raise
-                await take_off(self.repo, trade["listing_ref"], exc.code)
-                return await self._fail(trade["id"], exc.code)
             async with self.repo.transaction():
                 trade = await self._locked_trade(trade["id"])
-                if len(trade["granted"]) == n:  # 并发重来的那一个已经记了就不再记
-                    granted = [
-                        *trade["granted"],
-                        {
-                            "seller_item_id": str(item["seller_item_id"]),
-                            # 使用权建在同一份资料上（不复制），编号就是卖家那份
-                            "item_id": str(got.get("material_id")),
-                            "version_no": got.get("version_no"),
-                            "name": str(item.get("name")),
-                            "sha256": str(item.get("sha256")),
-                        },
-                    ]
-                    await self.repo.update_trade(trade["id"], granted=granted)
-                    trade = {**trade, "granted": granted}
+                if trade["status"] != "granting":
+                    return trade
+                if n < len(trade["granted"]):
+                    continue
+                try:
+                    got = await vault.purchase(
+                        seller=trade["seller_subject"],
+                        material_id=str(item["seller_item_id"]),
+                        buyer=trade["buyer_subject"],
+                        transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
+                        resale_allowed=trade["resale_allowed"] is True,
+                    )
+                except (NotFoundError, ConcurrencyConflictError) as exc:
+                    if exc.code not in ("item_gone", "item_not_for_sale"):
+                        raise
+                    await take_off(self.repo, trade["listing_ref"], exc.code)
+                    await self.repo.update_trade(
+                        trade["id"], status="failed", failure=exc.code
+                    )
+                    return {**trade, "status": "failed", "failure": exc.code}
+                sha = got.get("sha256")
+                if (
+                    got.get("material_id") != str(item["seller_item_id"])
+                    or got.get("buyer") != trade["buyer_subject"]
+                    or got.get("license")
+                    != ("sale" if trade["resale_allowed"] else "self")
+                    or type(got.get("version_no")) is not int
+                    or got["version_no"] < 1
+                    or not isinstance(sha, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", sha)
+                ):
+                    raise BadGatewayError(
+                        "Purchase receipt differs from the requested holding",
+                        code="purchase_receipt_invalid",
+                    )
+                granted = [
+                    *trade["granted"],
+                    {
+                        "seller_item_id": str(item["seller_item_id"]),
+                        "item_id": got["material_id"],
+                        "version_no": got["version_no"],
+                        "name": item.get("name"),
+                        "sha256": sha,
+                    },
+                ]
+                await self.repo.update_trade(trade["id"], granted=granted)
         async with self.repo.transaction():
             trade = await self._locked_trade(trade["id"])
-            if trade["status"] != "done":
+            if trade["status"] == "granting":
                 await self.repo.update_trade(trade["id"], status="done")
                 if trade["demand_id"] is not None:
                     await self.repo.update_demand(trade["demand_id"], status="closed")
                 trade = {**trade, "status": "done"}
-        return trade
-
-    async def _fail(self, trade_id: uuid.UUID, reason: str) -> Row:
-        """卖家那份没了或不再出售，办不下去：这笔记成终态失败、照实告诉买家，不再接手
-        （Fable 评审 P1-2）。已建好的那几份使用权照旧归他。"""
-        async with self.repo.transaction():
-            trade = await self._locked_trade(trade_id)
-            if trade["status"] == "granting":
-                await self.repo.update_trade(trade_id, status="failed", failure=reason)
-                trade = {**trade, "status": "failed", "failure": reason}
         return trade
 
     async def _locked_trade(self, trade_id: uuid.UUID) -> Row:
@@ -2033,13 +2048,13 @@ class MarketService:
         }
 
     async def close_demand(self, subject: str, demand_id: str) -> Row:
-        found = await self.repo.get_demand(demand_id)
-        if found is None or found["buyer_subject"] != subject:
-            raise _missing("demand")
-        # 选定了也能关：比如线下谈完了、不在这里成交（Fable 评审 P2-9）
-        if found["status"] not in ("open", "chosen"):
-            raise _conflict("This demand is not open", "demand_state")
         async with self.repo.transaction():
+            found = await self.repo.get_demand(demand_id, lock=True)
+            if found is None or found["buyer_subject"] != subject:
+                raise _missing("demand")
+            # 选定了也能关：比如线下谈完了、不在这里成交（Fable 评审 P2-9）
+            if found["status"] not in ("open", "chosen"):
+                raise _conflict("This demand is not open", "demand_state")
             await self.repo.update_demand(found["id"], status="closed")
         return await self.demand(subject, demand_id)
 
@@ -2060,6 +2075,13 @@ class MarketService:
             )
         try:
             async with self.repo.transaction():
+                current = await self.repo.get_demand(demand_id, lock=True)
+                if not current or not demand_open(
+                    current["status"], current["deadline"], self.now().date()
+                ):
+                    raise _conflict(
+                        "This demand no longer takes responses", "demand_closed"
+                    )
                 created = await self.repo.add_response(
                     {
                         "demand_id": found["id"],
@@ -2097,12 +2119,12 @@ class MarketService:
         return out
 
     async def withdraw_response(self, subject: str, response_id: str) -> Row:
-        found = await self.repo.get_response(response_id)
-        if found is None or found["seller_subject"] != subject:
-            raise _missing("response")
-        if found["status"] != "open":
-            raise _conflict("This response cannot be withdrawn", "response_state")
         async with self.repo.transaction():
+            found = await self.repo.get_response(response_id, lock=True)
+            if found is None or found["seller_subject"] != subject:
+                raise _missing("response")
+            if found["status"] != "open":
+                raise _conflict("This response cannot be withdrawn", "response_state")
             await self.repo.update_response(found["id"], status="withdrawn")
         found = await self.repo.get_response(response_id)
         assert found is not None
@@ -2142,19 +2164,19 @@ class MarketService:
         self, subject: str, demand_id: str, response_id: str
     ) -> Row:
         """买家选一家：别的响应结束，写明买家选了别家。"""
-        found = await self.repo.get_demand(demand_id)
-        if found is None or found["buyer_subject"] != subject:
-            raise _missing("demand")
-        if found["status"] != "open":
-            raise _conflict("This demand is not open", "demand_state")
-        response = await self.repo.get_response(response_id)
-        if (
-            response is None
-            or response["demand_id"] != found["id"]
-            or response["status"] != "open"
-        ):
-            raise _missing("response")
         async with self.repo.transaction():
+            found = await self.repo.get_demand(demand_id, lock=True)
+            if found is None or found["buyer_subject"] != subject:
+                raise _missing("demand")
+            if found["status"] != "open":
+                raise _conflict("This demand is not open", "demand_state")
+            response = await self.repo.get_response(response_id, lock=True)
+            if (
+                response is None
+                or response["demand_id"] != found["id"]
+                or response["status"] != "open"
+            ):
+                raise _missing("response")
             await self.repo.update_response(response["id"], status="chosen")
             await self.repo.close_other_responses(found["id"], response["id"])
             await self.repo.update_demand(
@@ -2203,26 +2225,38 @@ class MarketService:
             raise _missing("knowbot")
 
     async def _chosen_demand(
-        self, subject: str, demand_id: str | None, kind: str, ref: str
+        self,
+        subject: str,
+        demand_id: str | None,
+        kind: str,
+        ref: str,
+        *,
+        response_id: str | None = None,
+        seller: str | None = None,
     ) -> uuid.UUID | None:
         """从需求响应来的成交：需求是买家的、选中的那家附的就是这一条。"""
         if demand_id is None:
             return None
-        demand = await self.repo.get_demand(demand_id)
-        if (
-            demand is None
-            or demand["buyer_subject"] != subject
-            or demand["status"] != "chosen"
-        ):
+        demand = await self.repo.get_demand(demand_id, lock=True)
+        if demand is None or demand["buyer_subject"] != subject:
             raise _missing("demand")
+        if demand["status"] != "chosen":
+            if demand["status"] != "closed" or kind != "expert" or response_id is None:
+                raise _missing("demand")
+            receipt = await self.repo.expert_trade(subject, ref)
+            if receipt is None or receipt["demand_id"] != demand["id"]:
+                raise _missing("demand")
         response = (
-            await self.repo.get_response(str(demand["chosen_response_id"]))
+            await self.repo.get_response(str(demand["chosen_response_id"]), lock=True)
             if demand["chosen_response_id"]
             else None
         )
-        if response is None or (response["listing_kind"], response["listing_ref"]) != (
-            kind,
-            ref,
+        if (
+            response is None
+            or response["status"] != "chosen"
+            or (response_id is not None and str(response["id"]) != response_id)
+            or (seller is not None and response["seller_subject"] != seller)
+            or (response["listing_kind"], response["listing_ref"]) != (kind, ref)
         ):
             raise BadRequestError(
                 "The chosen response did not offer this listing",
