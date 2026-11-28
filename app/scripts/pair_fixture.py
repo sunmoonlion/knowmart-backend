@@ -122,11 +122,11 @@ async def web_me(
 async def logout(
     surface: str,
     request: Request,
-    response: Response,
     csrf_token: str | None = Header(default=None, alias="X-CSRF-Token"),
 ) -> Response:
     if surface not in {"admin", "web"} or not _csrf_allowed(request, csrf_token):
         return _error(403, "forbidden")
+    response = Response(status_code=204)
     response.delete_cookie(f"sunmoonai_knowmart_{surface}_sid", path="/")
     return response
 
