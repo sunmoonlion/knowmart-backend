@@ -1349,6 +1349,7 @@ class SqlMarketRepository:
                     Trade.buyer_subject == buyer,
                     Trade.listing_ref == listing_ref,
                     Trade.kind == "expert",
+                    Trade.duplicate_of.is_(None),
                 )
             )
         ).scalar_one_or_none()
@@ -1376,7 +1377,7 @@ class SqlMarketRepository:
                 .values(id=trade_id, **fields)
                 .on_conflict_do_nothing(
                     index_elements=[Trade.buyer_subject, Trade.listing_ref],
-                    index_where=Trade.kind == "expert",
+                    index_where=(Trade.kind == "expert") & Trade.duplicate_of.is_(None),
                 )
             )
             row = (
@@ -1385,6 +1386,7 @@ class SqlMarketRepository:
                         Trade.buyer_subject == fields["buyer_subject"],
                         Trade.listing_ref == fields["listing_ref"],
                         Trade.kind == "expert",
+                    Trade.duplicate_of.is_(None),
                     )
                 )
             ).scalar_one()

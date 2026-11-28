@@ -127,7 +127,7 @@ class Trade(Base):
             "buyer_subject",
             "listing_ref",
             unique=True,
-            postgresql_where=text("kind = 'expert'"),
+            postgresql_where=text("kind = 'expert' AND duplicate_of IS NULL"),
         ),
         Index(
             "ix_trade_buyer_formal_ref",
@@ -139,6 +139,7 @@ class Trade(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    duplicate_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     buyer_subject: Mapped[str] = mapped_column(String(512), nullable=False)
     seller_subject: Mapped[str] = mapped_column(String(512), nullable=False)

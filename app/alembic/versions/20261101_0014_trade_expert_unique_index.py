@@ -18,14 +18,21 @@ depends_on = None
 
 
 def upgrade() -> None:
+    op.add_column("trade", sa.Column("duplicate_of", sa.Uuid(), nullable=True))
+    op.execute("""WITH ranked AS (
+        SELECT id, first_value(id) OVER (PARTITION BY buyer_subject, listing_ref
+            ORDER BY created_at, id) AS keeper FROM trade WHERE kind = 'expert'
+    ) UPDATE trade t SET duplicate_of=r.keeper FROM ranked r
+        WHERE t.id=r.id AND t.id<>r.keeper""")
     op.create_index(
         "ix_trade_buyer_expert_ref",
         "trade",
         ["buyer_subject", "listing_ref"],
         unique=True,
-        postgresql_where=sa.text("kind = 'expert'"),
+        postgresql_where=sa.text("kind = 'expert' AND duplicate_of IS NULL"),
     )
 
 
 def downgrade() -> None:
     op.drop_index("ix_trade_buyer_expert_ref", table_name="trade")
+    op.execute("ALTER TABLE trade DROP COLUMN IF EXISTS duplicate_of")
