@@ -112,6 +112,10 @@ def test_web_return_to_allowlist_and_admin_root_policy_are_explicit() -> None:
         "/en/dashboard",
         "/zh-CN/login",
         "/en/login",
+        "/zh-CN/knowbots",
+        "/en/knowbots",
+        "/zh-CN/knowledge",
+        "/en/knowledge",
     )
     with pytest.raises(ValueError, match="must match"):
         production_settings(

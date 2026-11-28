@@ -108,7 +108,7 @@ class Settings(BaseSettings):
     web_frontend_allowed_origins: str | None = None
     web_auth_default_return_to: str = "/zh-CN/dashboard"
     web_auth_allowed_return_paths: str = (
-        "/zh-CN/dashboard,/en/dashboard,/zh-CN/login,/en/login"
+        "/zh-CN/dashboard,/en/dashboard,/zh-CN/login,/en/login,/zh-CN/knowbots,/en/knowbots,/zh-CN/knowledge,/en/knowledge"
     )
     web_frontend_default_locale: str = "zh-CN"
 

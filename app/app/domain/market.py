@@ -34,7 +34,10 @@ MAX_PRICE = Decimal("1000000")
 MAX_KNOWLEDGE_ITEMS = 20
 DOCUMENT_MAX_BYTES = 5 * 1024 * 1024
 DOCUMENT_TYPES = frozenset({"image/jpeg", "image/png", "application/pdf"})
-DOCUMENT_KINDS = frozenset({"id_front", "id_back", "business_license", "license"})
+DOCUMENT_KINDS = {
+    "individual": frozenset({"id_front", "id_back", "license"}),
+    "organization": frozenset({"business_license", "license"}),
+}
 # 证件照片审过后留多久（第 9 小节第 4 项）；资质到期前多少天提醒（第 5 小节）
 DOCUMENT_KEEP_DAYS = 365
 LICENSE_REMIND_DAYS = 30

@@ -632,12 +632,13 @@ class SqlMarketRepository:
         return None if row is None else _row(row)
 
     # ---------- 发布主体与资质 ----------
-    async def publisher_of(self, subject: str) -> dict[str, Any] | None:
-        row = (
-            await self.session.execute(
-                select(Publisher).where(Publisher.owner_subject == subject)
-            )
-        ).scalar_one_or_none()
+    async def publisher_of(
+        self, subject: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
+        stmt = select(Publisher).where(Publisher.owner_subject == subject)
+        if lock:
+            stmt = stmt.with_for_update().execution_options(populate_existing=True)
+        row = (await self.session.execute(stmt)).scalar_one_or_none()
         return None if row is None else _row(row, skip=("id_number_hash",))
 
     async def get_publisher(self, publisher_id: str) -> dict[str, Any] | None:

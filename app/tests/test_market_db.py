@@ -1743,3 +1743,31 @@ async def test_typed_catalog_uses_frozen_kind_and_visible_listings(world):
         assert all(page["total"] == 26 for page in pages)
 
     await world.run(scenario)
+
+
+async def test_uploaded_document_kind_matches_current_publisher(world: World) -> None:
+    await approved_publisher(world)
+
+    async def change(svc: MarketService, admin: MarketAdmin):
+        with pytest.raises(BadRequestError) as caught:
+            await svc.add_document(SELLER, "business_license", "image/png", PNG)
+        assert caught.value.code == "document_kind_invalid"
+        await svc.save_publisher(
+            SELLER,
+            PublisherIn(
+                kind="organization",
+                name="某公司",
+                credit_code="91110000000000000X",
+                legal_person="甲",
+                contact_name="乙",
+            ),
+        )
+        for kind in ("id_front", "id_back"):
+            with pytest.raises(BadRequestError) as caught:
+                await svc.add_document(SELLER, kind, "image/png", PNG)
+            assert caught.value.code == "document_kind_invalid"
+        for kind in ("business_license", "license"):
+            doc = await svc.add_document(SELLER, kind, "image/png", PNG)
+            assert doc["kind"] == kind
+
+    await world.run(change)

@@ -560,9 +560,6 @@ class MarketService:
     async def add_document(
         self, subject: str, kind: str, media_type: str, data: bytes
     ) -> Row:
-        publisher = await self._publisher(subject)
-        if kind not in DOCUMENT_KINDS:
-            raise BadRequestError("Unknown document kind", code="document_kind_invalid")
         media = media_type.split(";")[0].strip().lower()
         if media not in DOCUMENT_TYPES:
             raise BadRequestError(
@@ -573,6 +570,12 @@ class MarketService:
                 "A photo can be at most 5 MB", code="document_too_large"
             )
         async with self.repo.transaction():
+            publisher = await self._publisher(subject, lock=True)
+            if kind not in DOCUMENT_KINDS[publisher["kind"]]:
+                raise BadRequestError(
+                    "Document kind does not match the publisher",
+                    code="document_kind_invalid",
+                )
             found = await self.repo.add_document(
                 {
                     "publisher_id": publisher["id"],
@@ -612,8 +615,8 @@ class MarketService:
             )
         return license_view(found, today=self.now().date())
 
-    async def _publisher(self, subject: str) -> Row:
-        found = await self.repo.publisher_of(subject)
+    async def _publisher(self, subject: str, *, lock: bool = False) -> Row:
+        found = await self.repo.publisher_of(subject, lock=lock)
         if found is None:
             raise BadRequestError(
                 "Register as a publisher first", code="publisher_required"
