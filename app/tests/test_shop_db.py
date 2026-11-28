@@ -782,22 +782,31 @@ async def test_report_decision_and_target_roll_back_together(world):
         assert (await repo.get_demand(target))["status"] == "open"
         assert (await repo.get_report(case["report_id"]))["status"] == "open"
 
-async def test_knowledge_revocations_resume_after_vault_outage(world,monkeypatch):
+async def test_knowledge_revocations_resume_after_vault_outage(world, monkeypatch):
     from app.application.errors.exceptions import ServiceUnavailableError
+
     await approved_publisher(world)
-    listing=await listed_knowledge(world)
-    async def work(svc,admin):
-        purchased=await svc.buy(BUYER,listing,BuyIn(request_id="buy-revoke-outage"))
+    listing = await listed_knowledge(world)
+
+    async def work(svc, admin):
+        purchased = await svc.buy(BUYER, listing, BuyIn(request_id="buy-revoke-outage"))
+
         async def fail(**kwargs):
             raise ServiceUnavailableError("temporary outage")
+
         with monkeypatch.context() as patch:
-            patch.setattr(world.vault,"revoke_purchase",fail)
-            await admin.take_down("knowledge",listing,"violation",OPS,violation=True)
-        trade=await admin.repo.get_trade(purchased["trade_id"])
-        assert trade["failure"]=="violation_revoke_pending" and world.vault.holdings
+            patch.setattr(world.vault, "revoke_purchase", fail)
+            await admin.take_down(
+                "knowledge", listing, "violation", OPS, violation=True
+            )
+        trade = await admin.repo.get_trade(purchased["trade_id"])
+        assert trade["failure"] == "violation_revoke_pending" and world.vault.holdings
         await admin.check_offers()
-        assert (await admin.repo.get_trade(trade["id"]))["failure"]=="violation_taken_down"
+        assert (await admin.repo.get_trade(trade["id"]))[
+            "failure"
+        ] == "violation_taken_down"
         assert not world.vault.holdings
+
     await world.run(work)
 
 
