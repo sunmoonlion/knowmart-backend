@@ -525,7 +525,11 @@ async def test_a_refused_batch_is_logged_and_its_listings_stay_up(
         return await admin.check_offers()
 
     with caplog.at_level("WARNING"):
-        assert await world.run(check) == {"checked": 0, "delisted": 0, "skipped": "items_invalid"}
+        assert await world.run(check) == {
+            "checked": 0,
+            "delisted": 0,
+            "skipped": "items_invalid",
+        }
     assert any(
         "offer_check_batch_refused" in r.getMessage()
         and "items_invalid" in r.getMessage()
@@ -609,6 +613,10 @@ async def test_review_fixes_and_m2_violation_takedown(world: ShopWorld, db) -> N
         # 平台违规下架：收回买家使用权并留痕
         await admin.take_down(
             "knowledge", knowledge_listing, "严重虚假宣传", OPS, violation=True
+        )
+        assert not any(
+            k[2].startswith(f"knowmart-trade:{trade['trade_id']}:")
+            for k in world.vault.holdings
         )
         [t] = [
             x
@@ -748,6 +756,7 @@ async def test_purchase_replay_and_resale_use_only_delivered_content(world):
 
 async def test_report_decision_and_target_roll_back_together(world):
     from unittest.mock import patch
+
     from app.domain.market import ReportDecision, ReportIn
 
     row = await world.run(lambda svc, _: svc.create_demand(BUYER, demand()))
@@ -772,3 +781,21 @@ async def test_report_decision_and_target_roll_back_together(world):
         repo = world.admin(session).repo
         assert (await repo.get_demand(target))["status"] == "open"
         assert (await repo.get_report(case["report_id"]))["status"] == "open"
+
+async def test_knowledge_revocations_resume_after_vault_outage(world,monkeypatch):
+    from app.application.errors.exceptions import ServiceUnavailableError
+    await approved_publisher(world)
+    listing=await listed_knowledge(world)
+    async def work(svc,admin):
+        purchased=await svc.buy(BUYER,listing,BuyIn(request_id="buy-revoke-outage"))
+        async def fail(**kwargs):
+            raise ServiceUnavailableError("temporary outage")
+        with monkeypatch.context() as patch:
+            patch.setattr(world.vault,"revoke_purchase",fail)
+            await admin.take_down("knowledge",listing,"violation",OPS,violation=True)
+        trade=await admin.repo.get_trade(purchased["trade_id"])
+        assert trade["failure"]=="violation_revoke_pending" and world.vault.holdings
+        await admin.check_offers()
+        assert (await admin.repo.get_trade(trade["id"]))["failure"]=="violation_taken_down"
+        assert not world.vault.holdings
+    await world.run(work)

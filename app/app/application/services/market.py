@@ -1822,6 +1822,9 @@ class MarketService:
         )
         self._need_vault()
         async with self.repo.transaction():
+            listing = await self.repo.get_listing(listing_id, lock=True)
+            if listing is None or listing["status"] != "listed":
+                raise _missing()
             return await self.repo.start_trade(
                 {
                     "kind": "knowledge",
@@ -2544,6 +2547,7 @@ class MarketAdmin:
         以服务身份成批问 knowbase；knowbase 没配、连不上就这一轮不核，下一轮再来。"""
         if self.vault is None:
             return {"checked": 0, "delisted": 0, "skipped": "knowbase_unconfigured"}
+        await self._finish_revocations(await self.repo.pending_purchase_revocations())
         listings = await self.repo.listings_up()
         pairs = list(
             dict.fromkeys(
@@ -2912,6 +2916,44 @@ class MarketAdmin:
         async with self.repo.transaction():
             await self._take_down(kind, target_id, note, reviewer, violation=violation)
 
+        if kind == "knowledge" and violation and self.vault is not None:
+            await self._finish_revocations(
+                await self.repo.trades_for_listing(target_id)
+            )
+
+    async def _finish_revocations(self, trades):
+        for trade in trades:
+            if trade.get("failure") != "violation_revoke_pending":
+                continue
+            try:
+                for n, item in enumerate(trade["planned"] or trade["granted"]):
+                    await self.vault.revoke_purchase(
+                        seller=trade["seller_subject"],
+                        buyer=trade["buyer_subject"],
+                        material_id=str(item["seller_item_id"]),
+                        transaction_ref=f"knowmart-trade:{trade['id']}:{n}",
+                    )
+            except AppException as exc:
+                log.warning(
+                    "purchase_revocation_pending trade=%s reason=%s",
+                    trade["id"],
+                    exc.code,
+                )
+                # Rotate failed requests behind the rest of the pending batch.
+                async with self.repo.transaction():
+                    current = await self.repo.get_trade(trade["id"], for_update=True)
+                    if current and current["failure"] == "violation_revoke_pending":
+                        await self.repo.update_trade(
+                            trade["id"],
+                            failure="violation_revoke_pending",
+                            revoke_attempted_at=self.now(),
+                        )
+                continue
+            async with self.repo.transaction():
+                await self.repo.update_trade(
+                    trade["id"], failure="violation_taken_down"
+                )
+
     async def _take_down(
         self,
         kind: str,
@@ -2923,7 +2965,7 @@ class MarketAdmin:
     ) -> None:
         now = self.now()
         if kind == "knowledge":
-            found = await self.repo.get_listing(target_id)
+            found = await self.repo.get_listing(target_id, lock=True)
             if found is None:
                 raise _missing()
             review_note = f"违规下架：{note}" if violation else note
@@ -2938,9 +2980,15 @@ class MarketAdmin:
                 # 违规下架收回买家使用权留痕
                 trades = await self.repo.trades_for_listing(str(found["id"]))
                 for t in trades:
-                    await self.repo.update_trade(
-                        t["id"], failure="violation_taken_down"
-                    )
+                    trade = await self.repo.get_trade(t["id"], for_update=True)
+                    if trade["failure"] != "violation_taken_down":
+                        await self.repo.update_trade(
+                            t["id"],
+                            failure="violation_revoke_pending",
+                            status="failed"
+                            if trade["status"] == "granting"
+                            else trade["status"],
+                        )
         elif kind == "expert":
             bot = await self.repo.get_knowbot(target_id.partition("@")[0])
             if bot is None:

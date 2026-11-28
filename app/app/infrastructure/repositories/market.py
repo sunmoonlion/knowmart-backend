@@ -1096,9 +1096,17 @@ class SqlMarketRepository:
         await self.session.refresh(row)
         return _row(row)
 
-    async def get_listing(self, listing_id: str) -> dict[str, Any] | None:
+    async def get_listing(
+        self, listing_id: str, *, lock: bool = False
+    ) -> dict[str, Any] | None:
         key = _id(listing_id)
-        row = await self.session.get(KnowledgeListing, key) if key else None
+        row = (
+            await self.session.get(
+                KnowledgeListing, key, with_for_update=lock, populate_existing=lock
+            )
+            if key
+            else None
+        )
         return None if row is None else _row(row)
 
     async def update_listing(self, listing_id: uuid.UUID, **fields: Any) -> None:
@@ -1331,6 +1339,17 @@ class SqlMarketRepository:
         )
 
     # ---------- 交易与评价 ----------
+    async def pending_purchase_revocations(self) -> list[dict[str, Any]]:
+        rows = await self.session.scalars(
+            select(Trade)
+            .where(
+                Trade.kind == "knowledge", Trade.failure == "violation_revoke_pending"
+            )
+            .order_by(Trade.revoke_attempted_at.asc().nulls_first(), Trade.id)
+            .limit(100)
+        )
+        return [_row(r) for r in rows]
+
     async def trades_for_listing(self, listing_id: str) -> list[dict[str, Any]]:
         rows = (
             await self.session.execute(
@@ -1386,7 +1405,7 @@ class SqlMarketRepository:
                         Trade.buyer_subject == fields["buyer_subject"],
                         Trade.listing_ref == fields["listing_ref"],
                         Trade.kind == "expert",
-                    Trade.duplicate_of.is_(None),
+                        Trade.duplicate_of.is_(None),
                     )
                 )
             ).scalar_one()

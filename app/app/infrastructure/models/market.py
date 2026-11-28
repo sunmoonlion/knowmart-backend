@@ -139,6 +139,9 @@ class Trade(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    revoke_attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     duplicate_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     buyer_subject: Mapped[str] = mapped_column(String(512), nullable=False)

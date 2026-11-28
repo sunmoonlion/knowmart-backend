@@ -88,6 +88,11 @@ class Vault:
     async def materials(self, user_token: str) -> list[dict[str, Any]]:
         return [{"material_id": k, **v} for k, v in self.offered.items()]
 
+    async def revoke_purchase(self, **terms):
+        self.holdings.pop(
+            (terms["buyer"], terms["material_id"], terms["transaction_ref"]), None
+        )
+
     async def purchase(self, **kw: Any) -> dict[str, Any]:
         """同 knowbase：按买家、资料与交易编号幂等，重发回已建的那条。"""
         material = kw["material_id"]

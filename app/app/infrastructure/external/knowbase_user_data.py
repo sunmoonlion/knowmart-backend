@@ -74,6 +74,20 @@ class KnowbaseLibrary:
 
     # —— 服务 ——
 
+    async def revoke_purchase(self, *, seller, material_id, buyer, transaction_ref):
+        token = await self._service_token("user-data-purchase")
+        return await self._send(
+            "POST",
+            "/purchases/revoke",
+            token,
+            json=dict(
+                seller=seller,
+                material_id=material_id,
+                buyer=buyer,
+                transaction_ref=transaction_ref,
+            ),
+        )
+
     async def purchase(
         self,
         *,
@@ -276,6 +290,27 @@ class KnowbaseVault:
                 }
             )
         return out
+
+    async def revoke_purchase(self, *, seller, material_id, buyer, transaction_ref):
+        try:
+            receipt = await self.client.revoke_purchase(
+                seller=seller,
+                material_id=material_id,
+                buyer=buyer,
+                transaction_ref=transaction_ref,
+            )
+        except KnowbaseRefused as exc:
+            raise BadGatewayError(
+                "knowbase refused purchase revocation", code=exc.code
+            ) from None
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("revoked") is not True
+            or receipt.get("transaction_ref") != transaction_ref
+        ):
+            raise BadGatewayError(
+                "Purchase revocation receipt differs", code="purchase_receipt_invalid"
+            )
 
     async def purchase(
         self,
