@@ -2925,8 +2925,20 @@ class MarketAdmin:
         for trade in trades:
             if trade.get("failure") != "violation_revoke_pending":
                 continue
+            items = trade["planned"] or trade["granted"]
+            if not items or any(
+                not isinstance(item, dict) or not item.get("seller_item_id")
+                for item in items
+            ):
+                # A copied item without its original purchase identity cannot
+                # attest to revocation in the vault.
+                async with self.repo.transaction():
+                    await self.repo.update_trade(
+                        trade["id"], failure="violation_revoke_unverified"
+                    )
+                continue
             try:
-                for n, item in enumerate(trade["planned"] or trade["granted"]):
+                for n, item in enumerate(items):
                     await self.vault.revoke_purchase(
                         seller=trade["seller_subject"],
                         buyer=trade["buyer_subject"],

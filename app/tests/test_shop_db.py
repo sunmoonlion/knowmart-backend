@@ -799,3 +799,22 @@ async def test_knowledge_revocations_resume_after_vault_outage(world,monkeypatch
         assert (await admin.repo.get_trade(trade["id"]))["failure"]=="violation_taken_down"
         assert not world.vault.holdings
     await world.run(work)
+
+
+async def test_purchase_without_original_identity_is_not_confirmed_revoked(world):
+    await approved_publisher(world)
+    listing = await listed_knowledge(world)
+
+    async def work(svc, admin):
+        bought = await svc.buy(BUYER, listing, BuyIn(request_id="old-revoke"))
+        trade_id = bought["trade_id"]
+        async with admin.repo.transaction():
+            await admin.repo.update_trade(
+                trade_id, planned=[], granted=[{"item_id": "old-copy"}]
+            )
+        await admin.take_down("knowledge", listing, "violation", OPS, violation=True)
+        trade = await admin.repo.get_trade(trade_id)
+        assert trade["failure"] == "violation_revoke_unverified"
+        assert world.vault.holdings
+
+    await world.run(work)
